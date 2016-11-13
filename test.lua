@@ -185,7 +185,7 @@ local size = matrix{L,L}
 local center = size/2
 
 -- [[ using a real vector field
--- E = div psi + div x B
+-- E = del psi + del x B
 local E = matrix.zeros(L,L,2)
 for i=1,L do
 	for j=1,L do
@@ -193,7 +193,7 @@ for i=1,L do
 		E[i][j] = -x / x:norm()
 	end
 end
--- f = div.E = div^2 psi
+-- f = del.E = del^2 psi
 local f = div(E) / h
 --]]
 
@@ -216,26 +216,25 @@ local f = matrix.lambda(size, function(...)
 	return (i - center):normLInf() < 1 and Q or 0
 end)
 --]=]
+print('|del.E|',f:norm())
 
--- psi = div^-2 f
+-- psi = del^-2 f
 local psi = amrsolve(f, h)
+print('|del^-1.E|', psi:norm())
 
-print('div E frob norm',(div(E)/h):norm())
+-- curlfree E = del psi = del
+local curlfree_E = del(psi) / h
+print('|E - curlfree(E)|', (E - curlfree_E):norm())
 
--- div-free E = del psi
-local divfree_E = del(psi) / h
+local curlfree_f = div(curlfree_E) / h
+print('|del.curlfree(E)|', curlfree_f:norm())
 
-print('div vs divfree', (E - divfree_E):norm())
+local curlfree_psi = amrsolve(curlfree_f, h)
+print('|del^-1.curlfree(E)|', curlfree_psi:norm())
 
-local divfree_f = div(divfree_E) / h
-
-print('divfree E frob norm', divfree_f:norm())
-
-local divfree_psi = amrsolve(divfree_f, h)
-
-local divfree2_E = del(divfree_psi) / h
-
-print('divfree vs divfree2', (divfree_E - divfree2_E):norm())
+local curlfree2_E = del(curlfree_psi) / h
+print('|curlfree(E) - curlfree^2(E)|', (curlfree_E - curlfree2_E):norm())
+--]]
 
 local _ = require 'matrix.index'
 require 'gnuplot'{
@@ -249,8 +248,8 @@ require 'gnuplot'{
 		psi,
 		E(_,_,1),
 		E(_,_,2),
-		divfree_E(_,_,1),
-		divfree_E(_,_,2),
+		curlfree_E(_,_,1),
+		curlfree_E(_,_,2),
 	},
 	--{splot=true, using='1:2:3', title='f'},
 	--{splot=true, using='1:2:4', title='psi'},
@@ -261,7 +260,7 @@ require 'gnuplot'{
 	--{splot=true, using='1:2:5:6', 'with vectors', title='E'},
 	
 	-- this should be on the order of E as well, but instead it's 1e-7
-	--{splot=true, using='1:2:7', title='divfree-Ex'},
-	{splot=true, using='1:2:8', title='divfree-Ey'},
-	--{splot=true, using='1:2:7:8', 'with vectors', title='divfree-E'},
+	--{splot=true, using='1:2:7', title='curlfree-Ex'},
+	{splot=true, using='1:2:8', title='curlfree-Ey'},
+	--{splot=true, using='1:2:7:8', 'with vectors', title='curlfree-E'},
 }
