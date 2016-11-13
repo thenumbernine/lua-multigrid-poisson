@@ -1,0 +1,3 @@
+multigrid Poisson solver
+test.lua is the cpu version
+gpu.lua is the (NOT WORKING) gpu version
