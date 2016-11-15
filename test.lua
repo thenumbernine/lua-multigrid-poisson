@@ -227,10 +227,10 @@ local curlfree_E = del(psi) / h
 print('|E - curlfree(E)|', (E - curlfree_E):norm())
 
 local curlfree_f = div(curlfree_E) / h
-print('|del.curlfree(E)|', curlfree_f:norm())
+print('|del . curlfree(E)|', curlfree_f:norm())
 
 local curlfree_psi = amrsolve(curlfree_f, h)
-print('|del^-1.curlfree(E)|', curlfree_psi:norm())
+print('|del^-1 . curlfree(E)|', curlfree_psi:norm())
 
 local curlfree2_E = del(curlfree_psi) / h
 print('|curlfree(E) - curlfree^2(E)|', (curlfree_E - curlfree2_E):norm())

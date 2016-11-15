@@ -3,25 +3,25 @@
 local ffi = require 'ffi'
 
 local real = 'float'
-
 local size = 256 
 local platform, device, ctx, cmds, program = require 'cl'{
 	device = {gpu = true},
 	program = {
 		code = ([[
 #define size {size}
-
 typedef {real} real;
 
 __kernel void init(
 	__global real* f,
 	__global real* psi
 ) {
-	int2 i = (int2)(get_global_id(0), get_global_id(1));
-	int index = i.x + size * i.y;
+	int i = get_global_id(0);
+	int j = get_global_id(1);
+	if (i >= size || j >= size) return;
+	int index = i + size * j;
 	int center = size / 2;
 	real value = 0;
-	if (i.x == center && i.y == center) {
+	if (i == center && j == center) {
 		real charge = 1e+6;
 		const real epsilon0 = 1;
 		value = -charge / epsilon0;
@@ -39,6 +39,7 @@ __kernel void GaussSeidel(
 	int i = get_global_id(0);
 	int j = get_global_id(1);
 	int L = get_global_size(0);
+	if (i >= L || j >= L) return;
 	int index = i + L * j;
 	real u_xl = i > 0 ? u[(i-1) + L * j] : 0;
 	real u_xr = i < L-1 ? u[(i+1) + L * j] : 0;
@@ -57,9 +58,10 @@ __kernel void calcResidual(
 	const __global real* u,
 	real h
 ) {
-	int L = get_global_size(0);
 	int i = get_global_id(0);
 	int j = get_global_id(0);
+	int L = get_global_size(0);
+	if (i >= L || j >= L) return;
 	int index = i + L * j;
 	
 	real u_xl = i > 0 ? u[(i-1) + L * j] : 0;
@@ -81,6 +83,7 @@ __kernel void reduceResidual(
 	int L = L2 << 1;
 	int i = get_global_id(0);
 	int j = get_global_id(1);
+	if (i >= L || j >= L) return;
 	int srci = i + L * j;
 	R[i + L2 * j] = .25 * (r[srci] + r[srci+1] + r[srci+L] + r[srci+L+1]);
 }
@@ -93,6 +96,7 @@ __kernel void expandResidual(
 	int L = L2 << 1;
 	int I = get_global_id(0);
 	int J = get_global_id(1);
+	if (I >= L2 || J >= L2) return;
 	int dsti = (I<<1) + L * (J<<1);
 	v[dsti] = v[dsti+1] = v[dsti+L] = v[dsti+L+1] = V[I + L2 * J];
 }
@@ -103,6 +107,7 @@ __kernel void add(
 	const __global real* b
 ) {
 	int i = get_global_id(0);
+	if (i >= get_global_size(0)) return;
 	r[i] = a[i] + b[i];
 }
 
@@ -113,12 +118,18 @@ __kernel void calcError(
 ) {
 	int i = get_global_id(0);
 	int j = get_global_id(1);
-	int index = i + size * i;
+	if (i >= size || j >= size) return;
+	int index = i + size * j;
+#if 0	//relative error
 	if (psiNew[index] != 0 && psiNew[index] != psi[index]) {
 		errorBuf[index] = fabs(1. - psi[index] / psiNew[index]);
 	} else {
 		errorBuf[index] = 0;
 	}
+#else	//energy
+	real d = psi[index] - psiNew[index];
+	errorBuf[index] = .5 * d * d;
+#endif
 }
 
 
@@ -129,6 +140,8 @@ __kernel void calcError(
 	verbose = true,
 }
 local maxWorkGroupSize = tonumber(device:getInfo'CL_DEVICE_MAX_WORK_GROUP_SIZE')
+
+ffi.cdef('typedef '..real..' real;')
 
 local f = ctx:buffer{rw=true, size=size*size*ffi.sizeof(real)}
 local psi = ctx:buffer{rw=true, size=size*size*ffi.sizeof(real)}
@@ -144,18 +157,13 @@ for i=0,math.log(size,2) do
 	vs[L] = ctx:buffer{rw=true, size=L*L*ffi.sizeof(real)}
 end
 
-ffi.cdef('typedef '..real..' real;')
-
 local init = program:kernel'init'
+local calcError = program:kernel('calcError', errorBuf, psi, psiNew)
 local GaussSeidel = program:kernel'GaussSeidel'
 local calcResidual = program:kernel'calcResidual'
 local reduceResidual = program:kernel'reduceResidual'
 local expandResidual = program:kernel'expandResidual'
 local add = program:kernel'add'
-local calcError = program:kernel('calcError', errorBuf, psi, psiNew)
-
-local globalSize = {size,size}
-local localSize = {16,16}
 
 local function clcall1D(w, kernel, ...)
 	kernel:setArgs(...)
@@ -211,20 +219,20 @@ local smooth = 7
 local h = 1/size
 for iter=1,1 do
 	cmds:enqueueCopyBuffer{src=psi, dst=psiNew, size=size*size*ffi.sizeof(real)}
-	twoGrid(h, psi, f, size, smooth)
+	--twoGrid(h, psi, f, size, smooth)
 	
-	cmds:enqueueNDRangeKernel{kernel=calcError, globalSize=globalSize, localSize=localSize}
+	cmds:enqueueNDRangeKernel{kernel=calcError, globalSize={size,size}, localSize={16,16}}
 
-	-- doing the reduce in cpu ...
+	-- doing the error calculation in cpu ...
+	-- this is messing up the lua env ... total becomes nil
 	local tmp = ffi.new('real[?]', size*size)
 	cmds:enqueueReadBuffer{buffer=errorBuf, block=true, size=size*size*ffi.sizeof(real), ptr=tmp}
+	
 	local n = 0
 	local total = 0
 	for j=0,size*size-1 do
-		local tmpjp = ffi.cast('real*', tmp) + ffi.cast('int',j)
-		local tmpj = tonumber(tmpjp[0]) or 0	-- why would this ever be nil? but it is ...
-		if tmpj ~= 0 then
-			total = total + tmpj
+		if tmp[j] ~= 0 then
+			total = total + tmp[j]
 			n = n + 1
 		end
 	end
