@@ -141,7 +141,7 @@ local function amrsolve(f, h)
 		local frobErr = (psi - psiNew):norm()
 		local relErr = relativeError(psi, psiNew)
 		print(iter,'relErr', relErr, 'frob', frobErr)
-		if relErr < accuracy or not math.isfinite(relErr) then break end
+		if frobErr < accuracy or not math.isfinite(frobErr) then break end
 	end
 	return psi
 end
@@ -184,7 +184,7 @@ local h = 1 / (L + 1)
 local size = matrix{L,L}
 local center = size/2
 
--- [[ using a real vector field
+--[[ using a real vector field
 -- E = del psi + del x B
 local E = matrix.zeros(L,L,2)
 for i=1,L do
@@ -197,11 +197,11 @@ end
 local f = div(E) / h
 --]]
 
---[=[ manual specify f
+-- [=[ manual specify f
 local f = matrix.lambda(size, function(...)
 	local i = matrix{...}
 	
-	--[[ electricity: del^2 V = -rho / epsilon_0
+	-- [[ electricity: del^2 V = -rho / epsilon_0
 	local charge = 1e+6
 	local epsilon0 = 1
 	local Q = -charge / epsilon0
@@ -222,6 +222,7 @@ print('|del.E|',f:norm())
 local psi = amrsolve(f, h)
 print('|del^-1.E|', psi:norm())
 
+--[[
 -- curlfree E = del psi = del
 local curlfree_E = del(psi) / h
 print('|E - curlfree(E)|', (E - curlfree_E):norm())
@@ -236,6 +237,7 @@ local curlfree2_E = del(curlfree_psi) / h
 print('|curlfree(E) - curlfree^2(E)|', (curlfree_E - curlfree2_E):norm())
 --]]
 
+--[[
 local _ = require 'matrix.index'
 require 'gnuplot'{
 	persist = true,
@@ -264,3 +266,4 @@ require 'gnuplot'{
 	{splot=true, using='1:2:8', title='curlfree-Ey'},
 	--{splot=true, using='1:2:7:8', 'with vectors', title='curlfree-E'},
 }
+--]]

@@ -1,9 +1,10 @@
 #! /usr/bin/env luajit
 
 local ffi = require 'ffi'
+require 'ext'
 
 local real = 'float'
-local size = 256 
+local size = 16 
 local platform, device, ctx, cmds, program = require 'cl'{
 	device = {gpu = true},
 	program = {
@@ -36,9 +37,9 @@ __kernel void GaussSeidel(
 	const __global real* f,
 	real h
 ) {
+	int L = get_global_size(0);
 	int i = get_global_id(0);
 	int j = get_global_id(1);
-	int L = get_global_size(0);
 	if (i >= L || j >= L) return;
 	int index = i + L * j;
 	real u_xl = i > 0 ? u[(i-1) + L * j] : 0;
@@ -48,7 +49,6 @@ __kernel void GaussSeidel(
 	real hSq = h * h;
 	real askew_u = (u_xl + u_xr + u_yl + u_yr) / hSq;
 	real adiag = -4. / hSq;
-	real a_u = askew_u + adiag * u[i + L * j];
 	u[index] = (f[index] - askew_u) / adiag;
 }
 
@@ -58,12 +58,11 @@ __kernel void calcResidual(
 	const __global real* u,
 	real h
 ) {
-	int i = get_global_id(0);
-	int j = get_global_id(0);
 	int L = get_global_size(0);
+	int i = get_global_id(0);
+	int j = get_global_id(1);
 	if (i >= L || j >= L) return;
 	int index = i + L * j;
-	
 	real u_xl = i > 0 ? u[(i-1) + L * j] : 0;
 	real u_xr = i < L-1 ? u[(i+1) + L * j] : 0;
 	real u_yl = j > 0 ? u[i + L * (j-1)] : 0;
@@ -80,35 +79,47 @@ __kernel void reduceResidual(
 	const __global real* r
 ) {
 	int L2 = get_global_size(0);
+	int I = get_global_id(0);
+	int J = get_global_id(1);
+	if (I >= L2 || J >= L2) return;
 	int L = L2 << 1;
-	int i = get_global_id(0);
-	int j = get_global_id(1);
-	if (i >= L || j >= L) return;
-	int srci = i + L * j;
-	R[i + L2 * j] = .25 * (r[srci] + r[srci+1] + r[srci+L] + r[srci+L+1]);
+	int srci = (I<<1) + L * (J<<1);
+	R[I + L2 * J] = .25 * (r[srci] + r[srci+1] + r[srci+L] + r[srci+L+1]);
 }
 
 __kernel void expandResidual(
 	__global real* v,
 	const __global real* V
 ) {
+#if 0	//L2-sized kernel
 	int L2 = get_global_size(0);
-	int L = L2 << 1;
 	int I = get_global_id(0);
 	int J = get_global_id(1);
 	if (I >= L2 || J >= L2) return;
+	int L = L2 << 1;
 	int dsti = (I<<1) + L * (J<<1);
 	v[dsti] = v[dsti+1] = v[dsti+L] = v[dsti+L+1] = V[I + L2 * J];
+#else	//L-sized kernel
+	int L = get_global_size(0);
+	int i = get_global_id(0);
+	int j = get_global_id(1);
+	if (i >= L || j >= L) return;
+	int L2 = L >> 1;
+	int I = i >> 1;
+	int J = j >> 1;
+	v[i + L * j] = V[I + L2 * J];
+#endif
 }
 
-__kernel void add(
-	__global real* r,
-	const __global real* a,
-	const __global real* b
+
+
+__kernel void addTo(
+	__global real* u,
+	const __global real* v
 ) {
 	int i = get_global_id(0);
 	if (i >= get_global_size(0)) return;
-	r[i] = a[i] + b[i];
+	u[i] += v[i];
 }
 
 __kernel void calcError(
@@ -120,7 +131,7 @@ __kernel void calcError(
 	int j = get_global_id(1);
 	if (i >= size || j >= size) return;
 	int index = i + size * j;
-#if 0	//relative error
+#if 1	//relative error
 	if (psiNew[index] != 0 && psiNew[index] != psi[index]) {
 		errorBuf[index] = fabs(1. - psi[index] / psiNew[index]);
 	} else {
@@ -128,7 +139,7 @@ __kernel void calcError(
 	}
 #else	//energy
 	real d = psi[index] - psiNew[index];
-	errorBuf[index] = .5 * d * d;
+	errorBuf[index] = d * d;
 #endif
 }
 
@@ -148,22 +159,24 @@ local psi = ctx:buffer{rw=true, size=size*size*ffi.sizeof(real)}
 local psiNew = ctx:buffer{rw=true, size=size*size*ffi.sizeof(real)}
 local errorBuf = ctx:buffer{rw=true, size=size*size*ffi.sizeof(real)}
 
-local residuals = {}
+local rs = {}
+local Rs = {}
 local vs = {}
 for i=0,math.log(size,2) do
 	local L = 2^i
 	print('creating buffer with size '..L)
-	residuals[L] = ctx:buffer{rw=true, size=L*L*ffi.sizeof(real)}
+	rs[L] = ctx:buffer{rw=true, size=L*L*ffi.sizeof(real)}
+	Rs[L] = ctx:buffer{rw=true, size=L*L*ffi.sizeof(real)}
 	vs[L] = ctx:buffer{rw=true, size=L*L*ffi.sizeof(real)}
 end
 
 local init = program:kernel'init'
-local calcError = program:kernel('calcError', errorBuf, psi, psiNew)
+local calcError = program:kernel'calcError'
 local GaussSeidel = program:kernel'GaussSeidel'
 local calcResidual = program:kernel'calcResidual'
 local reduceResidual = program:kernel'reduceResidual'
 local expandResidual = program:kernel'expandResidual'
-local add = program:kernel'add'
+local addTo = program:kernel'addTo'
 
 local function clcall1D(w, kernel, ...)
 	kernel:setArgs(...)
@@ -177,41 +190,80 @@ local function clcall2D(w,h, kernel, ...)
 	local mh = maxWorkGroupSize / mw
 	local l1 = math.min(w, mw)
 	local l2 = math.min(h, mh)
+	print('clcall2D',w,h,l1,l2)
 	cmds:enqueueNDRangeKernel{kernel=kernel, globalSize={w,h}, localSize={l1,l2}}
 end
 
 clcall2D(size,size, init, f, psi)
 
+local function checknan(name, buf, w, h)
+	local tmp = gcnew('real', w*h)
+	cmds:enqueueReadBuffer{buffer=buf, block=true, size=w*h*ffi.sizeof(real), ptr=tmp}
+	print(name)
+	for j=0,h-1 do
+		for i=0,w-1 do
+			io.write(' ',tmp[i+w*j])
+		end
+		print()
+	end
+	for i=0,w*h-1 do
+		if not math.isfinite(tmp[i]) then
+			error("found a nan")
+		end
+	end
+	gcfree(tmp)
+end
+
 local function twoGrid(h, u, f, L, smooth)
+print('L',L,'h',h)
 	if L == 1 then
 		--*u = *f / (-4 / h^2)
-		cmds:enqueueFillBuffer{buffer=u, size=ffi.sizeof(real)}
+checknan('f', f, L, L)
+		clcall2D(L,L,GaussSeidel, u, f, ffi.new('real[1]', h))
+checknan('u', u, L, L)
 		return
 	end
-
+	
 	for i=1,smooth do
+print(tolua({
+	i=i,
+	L=L,
+	h=h,
+},{indent=true}))
+checknan('f', f, L, L)
 		clcall2D(L,L, GaussSeidel, u, f, ffi.new('real[1]', h))
+checknan('u', u, L, L)
 	end
-
-	local r = residuals[L]
+	
+	local r = rs[L]
+checknan('f', f, L, L)
+checknan('u', u, L, L)
+	--cmds:enqueueFillBuffer{buffer=r, size=L*L*ffi.sizeof(real)}
 	clcall2D(L,L, calcResidual, r, f, u, ffi.new('real[1]', h))
+checknan('r', r, L, L)
 	
 	--r = f - a(u)
 
 	local L2 = L/2
-	local R = residuals[L2]
+	local R = Rs[L2]
 	clcall2D(L2,L2, reduceResidual, R, r)
+checknan('R', R, L2, L2)
 	
 	local V = vs[L2]
 	twoGrid(2*h, V, R, L2, smooth)
+checknan('V', V, L2, L2)
 
 	local v = vs[L]
-	clcall2D(L2, L2, expandResidual, v, V)
+	--clcall2D(L2, L2, expandResidual, v, V)
+	clcall2D(L, L, expandResidual, v, V)
+checknan('v', v, L, L)
 
-	clcall1D(L*L, add, u, v, v)
+	clcall1D(L*L, addTo, u, v)
+checknan('u', u, L, L)
 
 	for i=1,smooth do
-		clcall2D(L,L, GaussSeidel, u, f, ffi.new('float[1]', h))
+		clcall2D(L,L, GaussSeidel, u, f, ffi.new('real[1]', h))
+checknan('u', u, L, L)
 	end
 end
 
@@ -219,22 +271,18 @@ local smooth = 7
 local h = 1/size
 for iter=1,1 do
 	cmds:enqueueCopyBuffer{src=psi, dst=psiNew, size=size*size*ffi.sizeof(real)}
-	--twoGrid(h, psi, f, size, smooth)
-	
-	cmds:enqueueNDRangeKernel{kernel=calcError, globalSize={size,size}, localSize={16,16}}
+	twoGrid(h, psi, f, size, smooth)
+	clcall2D(size, size, calcError, errorBuf, psi, psiNew)
 
 	-- doing the error calculation in cpu ...
 	-- this is messing up the lua env ... total becomes nil
-	local tmp = ffi.new('real[?]', size*size)
+	local tmp = gcnew('real', size*size)
 	cmds:enqueueReadBuffer{buffer=errorBuf, block=true, size=size*size*ffi.sizeof(real), ptr=tmp}
-	
-	local n = 0
-	local total = 0
+	local frobErr = 0
 	for j=0,size*size-1 do
-		if tmp[j] ~= 0 then
-			total = total + tmp[j]
-			n = n + 1
-		end
+		frobErr = frobErr + tmp[j]
 	end
-	print('rel err', total / n)
+	gcfree(tmp)
+	frobErr = math.sqrt(frobErr)
+	print('rel err', frobErr)
 end
