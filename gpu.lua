@@ -3,12 +3,27 @@
 local ffi = require 'ffi'
 require 'ext'
 
-local real = 'float'
-local size = 16 
-local platform, device, ctx, cmds, program = require 'cl'{
-	device = {gpu = true},
-	program = {
-		code = ([[
+
+local function get64bit(list)
+	local best = list:map(function(item)
+		local exts = item:getExtensions():lower():trim()
+		return {item=item, fp64=exts:match'cl_%w+_fp64'}
+	end):sort(function(a,b)
+		return (a.fp64 and 1 or 0) > (b.fp64 and 1 or 0)
+	end)[1]
+	return best.item, best.fp64
+end
+
+local platform = get64bit(require 'cl.platform'.getAll())
+local device, fp64 = get64bit(platform:getDevices{gpu=true})
+local ctx = require 'cl.context'{platform=platform, device=device}
+local cmds = require 'cl.commandqueue'{context=ctx, device=device}
+
+local real = fp64 and 'double' or 'float'
+print('using real',real)
+
+local size = 64 
+local code = ([[
 #define size {size}
 typedef {real} real;
 
@@ -91,7 +106,7 @@ __kernel void expandResidual(
 	__global real* v,
 	const __global real* V
 ) {
-#if 0	//L2-sized kernel
+#if 1	//L2-sized kernel
 	int L2 = get_global_size(0);
 	int I = get_global_id(0);
 	int J = get_global_id(1);
@@ -111,67 +126,85 @@ __kernel void expandResidual(
 #endif
 }
 
-
-
 __kernel void addTo(
+	size_t n,
 	__global real* u,
 	const __global real* v
 ) {
 	int i = get_global_id(0);
-	if (i >= get_global_size(0)) return;
+	if (i >= n) return;
 	u[i] += v[i];
 }
 
-__kernel void calcError(
+__kernel void calcRelErr(
 	__global real* errorBuf,
 	const __global real* psi,
-	const __global real* psiNew
+	const __global real* psiOld
 ) {
 	int i = get_global_id(0);
 	int j = get_global_id(1);
 	if (i >= size || j >= size) return;
 	int index = i + size * j;
-#if 1	//relative error
-	if (psiNew[index] != 0 && psiNew[index] != psi[index]) {
-		errorBuf[index] = fabs(1. - psi[index] / psiNew[index]);
+	if (psiOld[index] != 0 && psiOld[index] != psi[index]) {
+		errorBuf[index] = fabs(1. - psi[index] / psiOld[index]);
 	} else {
 		errorBuf[index] = 0;
 	}
-#else	//energy
-	real d = psi[index] - psiNew[index];
+}
+
+__kernel void calcFrobErr(
+	__global real* errorBuf,
+	const __global real* psi,
+	const __global real* psiOld
+) {
+	int i = get_global_id(0);
+	int j = get_global_id(1);
+	if (i >= size || j >= size) return;
+	int index = i + size * j;
+	real d = psi[index] - psiOld[index];
 	errorBuf[index] = d * d;
-#endif
 }
 
 
 ]])
 	:gsub('{real}', real)
 	:gsub('{size}', size)
-	},
-	verbose = true,
-}
+
+if fp64 then
+	code = '#pragma OPENCL EXTENSION cl_khr_fp64 : enable\n' .. code 
+end
+
+local program = require 'cl.program'{context=ctx, devices={device}, code=code}
+
 local maxWorkGroupSize = tonumber(device:getInfo'CL_DEVICE_MAX_WORK_GROUP_SIZE')
 
 ffi.cdef('typedef '..real..' real;')
 
 local f = ctx:buffer{rw=true, size=size*size*ffi.sizeof(real)}
 local psi = ctx:buffer{rw=true, size=size*size*ffi.sizeof(real)}
-local psiNew = ctx:buffer{rw=true, size=size*size*ffi.sizeof(real)}
+local psiOld = ctx:buffer{rw=true, size=size*size*ffi.sizeof(real)}
 local errorBuf = ctx:buffer{rw=true, size=size*size*ffi.sizeof(real)}
 
 local rs = {}
 local Rs = {}
 local vs = {}
+local Vs = {}
 for i=0,math.log(size,2) do
 	local L = 2^i
 	print('creating buffer with size '..L)
 	rs[L] = ctx:buffer{rw=true, size=L*L*ffi.sizeof(real)}
 	Rs[L] = ctx:buffer{rw=true, size=L*L*ffi.sizeof(real)}
 	vs[L] = ctx:buffer{rw=true, size=L*L*ffi.sizeof(real)}
+	Vs[L] = ctx:buffer{rw=true, size=L*L*ffi.sizeof(real)}
+	cmds:enqueueFillBuffer{buffer=rs[L], size=L*L*ffi.sizeof(real)}
+	cmds:enqueueFillBuffer{buffer=Rs[L], size=L*L*ffi.sizeof(real)}
+	cmds:enqueueFillBuffer{buffer=vs[L], size=L*L*ffi.sizeof(real)}
+	cmds:enqueueFillBuffer{buffer=Vs[L], size=L*L*ffi.sizeof(real)}
 end
 
 local init = program:kernel'init'
-local calcError = program:kernel'calcError'
+local calcFrobErr = program:kernel'calcFrobErr'
+local calcRelErr = program:kernel'calcRelErr'
 local GaussSeidel = program:kernel'GaussSeidel'
 local calcResidual = program:kernel'calcResidual'
 local reduceResidual = program:kernel'reduceResidual'
@@ -190,7 +223,6 @@ local function clcall2D(w,h, kernel, ...)
 	local mh = maxWorkGroupSize / mw
 	local l1 = math.min(w, mw)
 	local l2 = math.min(h, mh)
-	print('clcall2D',w,h,l1,l2)
 	cmds:enqueueNDRangeKernel{kernel=kernel, globalSize={w,h}, localSize={l1,l2}}
 end
 
@@ -199,15 +231,15 @@ clcall2D(size,size, init, f, psi)
 local function checknan(name, buf, w, h)
 	local tmp = gcnew('real', w*h)
 	cmds:enqueueReadBuffer{buffer=buf, block=true, size=w*h*ffi.sizeof(real), ptr=tmp}
-	print(name)
-	for j=0,h-1 do
-		for i=0,w-1 do
-			io.write(' ',tmp[i+w*j])
-		end
-		print()
-	end
 	for i=0,w*h-1 do
 		if not math.isfinite(tmp[i]) then
+			print(name)
+			for j=0,h-1 do
+				for i=0,w-1 do
+					io.write(' ',tmp[i+w*j])
+				end
+				print()
+			end
 			error("found a nan")
 		end
 	end
@@ -215,7 +247,6 @@ local function checknan(name, buf, w, h)
 end
 
 local function twoGrid(h, u, f, L, smooth)
-print('L',L,'h',h)
 	if L == 1 then
 		--*u = *f / (-4 / h^2)
 checknan('f', f, L, L)
@@ -225,11 +256,6 @@ checknan('u', u, L, L)
 	end
 	
 	for i=1,smooth do
-print(tolua({
-	i=i,
-	L=L,
-	h=h,
-},{indent=true}))
 checknan('f', f, L, L)
 		clcall2D(L,L, GaussSeidel, u, f, ffi.new('real[1]', h))
 checknan('u', u, L, L)
@@ -249,16 +275,16 @@ checknan('r', r, L, L)
 	clcall2D(L2,L2, reduceResidual, R, r)
 checknan('R', R, L2, L2)
 	
-	local V = vs[L2]
+	local V = Vs[L2]
 	twoGrid(2*h, V, R, L2, smooth)
 checknan('V', V, L2, L2)
 
 	local v = vs[L]
-	--clcall2D(L2, L2, expandResidual, v, V)
-	clcall2D(L, L, expandResidual, v, V)
+	clcall2D(L2, L2, expandResidual, v, V)
+	--clcall2D(L, L, expandResidual, v, V)
 checknan('v', v, L, L)
 
-	clcall1D(L*L, addTo, u, v)
+	clcall1D(L*L, addTo, ffi.new('size_t[1]', L*L), u, v)
 checknan('u', u, L, L)
 
 	for i=1,smooth do
@@ -266,23 +292,37 @@ checknan('u', u, L, L)
 checknan('u', u, L, L)
 	end
 end
+	
+-- doing the error calculation in cpu ...
+local errMem = gcnew('real', size*size)
 
 local smooth = 7
 local h = 1/size
-for iter=1,1 do
-	cmds:enqueueCopyBuffer{src=psi, dst=psiNew, size=size*size*ffi.sizeof(real)}
+for iter=1,20 do
+	cmds:enqueueCopyBuffer{src=psi, dst=psiOld, size=size*size*ffi.sizeof(real)}
 	twoGrid(h, psi, f, size, smooth)
-	clcall2D(size, size, calcError, errorBuf, psi, psiNew)
 
-	-- doing the error calculation in cpu ...
-	-- this is messing up the lua env ... total becomes nil
-	local tmp = gcnew('real', size*size)
-	cmds:enqueueReadBuffer{buffer=errorBuf, block=true, size=size*size*ffi.sizeof(real), ptr=tmp}
+	clcall2D(size, size, calcFrobErr, errorBuf, psi, psiOld)
+	cmds:enqueueReadBuffer{buffer=errorBuf, block=true, size=size*size*ffi.sizeof(real), ptr=errMem}
 	local frobErr = 0
 	for j=0,size*size-1 do
-		frobErr = frobErr + tmp[j]
+		frobErr = frobErr + errMem[j]
 	end
-	gcfree(tmp)
 	frobErr = math.sqrt(frobErr)
-	print('rel err', frobErr)
+	
+	clcall2D(size, size, calcRelErr, errorBuf, psi, psiOld)
+	cmds:enqueueReadBuffer{buffer=errorBuf, block=true, size=size*size*ffi.sizeof(real), ptr=errMem}
+	local relErr = 0
+	local n = 0
+	for j=0,size*size-1 do
+		if errMem[j] ~= 0 then
+			relErr = relErr + errMem[j]
+			n = n + 1
+		end
+	end
+	relErr = relErr / n
+
+	print(iter,'rel', relErr, 'frob', frobErr)
 end
+
+gcfree(errMem)

@@ -113,15 +113,15 @@ local function twoGrid(h, u, f, smooth)
 	end
 end
 
-local function relativeError(psi, psiNew)
+local function relativeError(psi, psiOld)
 	local L = #psi - 2
 	local err = 0
 	local n = 0
 	for i=2,L+1 do
 		for j=2,L+1 do
-			if psiNew[i][j] ~= 0 then
-				if psiNew[i][j] ~= psi[i][j] then
-					err = err + math.abs(1 - psi[i][j] / psiNew[i][j])
+			if psiOld[i][j] ~= 0 then
+				if psiOld[i][j] ~= psi[i][j] then
+					err = err + math.abs(1 - psi[i][j] / psiOld[i][j])
 					n = n + 1
 				end
 			end
@@ -136,11 +136,11 @@ local function amrsolve(f, h)
 	local smooth = 7	-- 7 is optimal time for me
 	local psi = -f
 	for iter=1,math.huge do
-		local psiNew = matrix(psi)
+		local psiOld = matrix(psi)
 		twoGrid(h, psi, f, smooth)
-		local frobErr = (psi - psiNew):norm()
-		local relErr = relativeError(psi, psiNew)
-		print(iter,'relErr', relErr, 'frob', frobErr)
+		local frobErr = (psi - psiOld):norm()
+		local relErr = relativeError(psi, psiOld)
+		print(iter,'rel', relErr, 'frob', frobErr)
 		if frobErr < accuracy or not math.isfinite(frobErr) then break end
 	end
 	return psi
