@@ -22,7 +22,7 @@ local cmds = require 'cl.commandqueue'{context=ctx, device=device}
 local real = fp64 and 'double' or 'float'
 print('using real',real)
 
-local size = 64 
+local size = 16
 local code = ([[
 #define size {size}
 typedef {real} real;
@@ -191,7 +191,6 @@ local vs = {}
 local Vs = {}
 for i=0,math.log(size,2) do
 	local L = 2^i
-	print('creating buffer with size '..L)
 	rs[L] = ctx:buffer{rw=true, size=L*L*ffi.sizeof(real)}
 	Rs[L] = ctx:buffer{rw=true, size=L*L*ffi.sizeof(real)}
 	vs[L] = ctx:buffer{rw=true, size=L*L*ffi.sizeof(real)}
@@ -228,68 +227,73 @@ end
 
 clcall2D(size,size, init, f, psi)
 
-local function checknan(name, buf, w, h)
-	local tmp = gcnew('real', w*h)
-	cmds:enqueueReadBuffer{buffer=buf, block=true, size=w*h*ffi.sizeof(real), ptr=tmp}
-	for i=0,w*h-1 do
-		if not math.isfinite(tmp[i]) then
-			print(name)
-			for j=0,h-1 do
-				for i=0,w-1 do
-					io.write(' ',tmp[i+w*j])
-				end
-				print()
-			end
+local function getbuffer(gpuMem, L)
+	local cpuMem = gcnew('real', L*L)
+	cmds:enqueueReadBuffer{buffer=gpuMem, block=true, size=L*L*ffi.sizeof(real), ptr=cpuMem}
+	return cpuMem
+end
+
+local function showAndCheck(name, gpuMem, L)
+	local cpuMem = getbuffer(gpuMem, L)
+	print(name)
+	for i=0,L-1 do
+		for j=0,L-1 do
+			io.write(' ',cpuMem[j+L*i])
+		end
+		print()
+	end
+	for i=0,L*L-1 do
+		if not math.isfinite(cpuMem[i]) then
 			error("found a nan")
 		end
 	end
-	gcfree(tmp)
+	gcfree(cpuMem)
 end
 
 local function twoGrid(h, u, f, L, smooth)
 	if L == 1 then
 		--*u = *f / (-4 / h^2)
-checknan('f', f, L, L)
+showAndCheck('f', f, L, L)
 		clcall2D(L,L,GaussSeidel, u, f, ffi.new('real[1]', h))
-checknan('u', u, L, L)
+showAndCheck('u', u, L, L)
 		return
 	end
 	
 	for i=1,smooth do
-checknan('f', f, L, L)
+showAndCheck('f', f, L, L)
 		clcall2D(L,L, GaussSeidel, u, f, ffi.new('real[1]', h))
-checknan('u', u, L, L)
+showAndCheck('u', u, L, L)
 	end
 	
 	local r = rs[L]
-checknan('f', f, L, L)
-checknan('u', u, L, L)
+showAndCheck('f', f, L, L)
+showAndCheck('u', u, L, L)
 	--cmds:enqueueFillBuffer{buffer=r, size=L*L*ffi.sizeof(real)}
 	clcall2D(L,L, calcResidual, r, f, u, ffi.new('real[1]', h))
-checknan('r', r, L, L)
+showAndCheck('r', r, L, L)
 	
 	--r = f - a(u)
 
 	local L2 = L/2
 	local R = Rs[L2]
 	clcall2D(L2,L2, reduceResidual, R, r)
-checknan('R', R, L2, L2)
+showAndCheck('R', R, L2, L2)
 	
 	local V = Vs[L2]
 	twoGrid(2*h, V, R, L2, smooth)
-checknan('V', V, L2, L2)
+showAndCheck('V', V, L2, L2)
 
 	local v = vs[L]
 	clcall2D(L2, L2, expandResidual, v, V)
 	--clcall2D(L, L, expandResidual, v, V)
-checknan('v', v, L, L)
+showAndCheck('v', v, L, L)
 
 	clcall1D(L*L, addTo, ffi.new('size_t[1]', L*L), u, v)
-checknan('u', u, L, L)
+showAndCheck('u', u, L, L)
 
 	for i=1,smooth do
 		clcall2D(L,L, GaussSeidel, u, f, ffi.new('real[1]', h))
-checknan('u', u, L, L)
+showAndCheck('u', u, L, L)
 	end
 end
 	

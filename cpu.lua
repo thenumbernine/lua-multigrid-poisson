@@ -36,6 +36,36 @@ local function GaussSeidel(h, u, f)
 	end
 end
 
+-- in-place Jacobi (using a temp buffer)
+local function Jacobi(h, u, f)
+	local L = #u
+	local newU = matrix.lambda({L,L}, function(i,j)
+		local u_xl = i > 1 and u[i-1][j] or 0--u[i][j]
+		local u_xr = i < L and u[i+1][j] or 0--u[i][j]
+		local u_yl = j > 1 and u[i][j-1] or 0--u[i][j]
+		local u_yr = j < L and u[i][j+1] or 0--u[i][j]
+		local askew_u = (u_xl + u_xr + u_yl + u_yr) / h^2
+		local adiag = -4 / h^2
+		return (f[i][j] - askew_u) / adiag
+	end)
+	for i=1,L do
+		for j=1,L do
+			u[i][j] = newU[i][j]
+		end
+	end
+end
+
+local function show(name, m, L)
+do return end
+	print(name)
+	for i=1,L do
+		for j=1,L do
+			io.write(' ',m[i][j])
+		end
+		print()
+	end
+end
+
 local accuracy = 1e-10
 local function twoGrid(h, u, f, smooth)
 	local L = #u
@@ -54,15 +84,21 @@ local function twoGrid(h, u, f, smooth)
 		end
 		local askew_u = (u_xl + u_xr + u_yl + u_yr) / h^2
 		local adiag = -4 / h^2
+show('f', f, L)
 		u[1][1] = (f[1][1] - askew_u) / adiag 
+show('u', u, L)
 		return
 	end
 
 	for i=1,smooth do
+show('f', f, L)
 		GaussSeidel(h, u, f)
+show('u', u, L)
 	end
 
 	-- r = f - del^2 u
+show('f', f, L)
+show('u', u, L)
 	local r = matrix.zeros(L,L)
 	for i=1,L do
 		for j=1,L do
@@ -76,6 +112,7 @@ local function twoGrid(h, u, f, smooth)
 			r[i][j] = f[i][j] - a_u
 		end
 	end
+show('r', r, L)
 	
 	-- del^2 V = R
 	local L2 = L/2
@@ -87,9 +124,11 @@ local function twoGrid(h, u, f, smooth)
 			R[I][J] = (r[i][j] + r[i+1][j] + r[i][j+1] + r[i+1][j+1]) / 4
 		end
 	end
+show('R', R, L2)
 
 	local V = matrix.zeros(L2, L2)
 	twoGrid(2*h, V, R, smooth)
+show('V', V, L2)
 
 	local v = matrix.zeros(L, L)
 	for I=1,L2 do
@@ -100,6 +139,7 @@ local function twoGrid(h, u, f, smooth)
 			v[i][j], v[i+1][j], v[i][j+1], v[i+1][j+1] = value, value, value, value
 		end
 	end
+show('V', V, L2)
 
 	-- correct u
 	for i=1,L do
@@ -107,9 +147,11 @@ local function twoGrid(h, u, f, smooth)
 			u[i][j] = u[i][j] + v[i][j]
 		end
 	end
+show('u', u, L)
 
 	for i=1,smooth do
 		GaussSeidel(h, u, f)
+show('u', u, L)
 	end
 end
 
@@ -178,7 +220,7 @@ local function del(psi)
 	end)
 end
 
-local log2L = ... and tonumber(...) or 6
+local log2L = ... and tonumber(...) or 4
 local L = bit.lshift(1,log2L)
 local h = 1 / (L + 1)
 local size = matrix{L,L}
@@ -213,7 +255,7 @@ local f = matrix.lambda(size, function(...)
 	local Q = 4 * math.pi * G * mass 
 	--]]
 
-	return (i - center):normLInf() < 1 and Q or 0
+	return (i - center - {1,1}):normLInf() < 1 and Q or 0
 end)
 --]=]
 print('|del.E|',f:norm())
