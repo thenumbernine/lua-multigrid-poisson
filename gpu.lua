@@ -329,6 +329,7 @@ end
 
 local smooth = 7
 local h = 1/size
+local accuracy = 1e-10
 for iter=1,200 do
 	cmds:enqueueCopyBuffer{src=psi, dst=psiOld, size=size*size*ffi.sizeof(real)}
 	twoGrid(h, psi, f, size, smooth)
@@ -368,6 +369,7 @@ for iter=1,200 do
 	relErr = relErr / n
 
 	print(iter,'rel', relErr, 'of n',n,'frob', frobErr)
+	if frobErr < accuracy or not math.isfinite(frobErr) then break end
 --do break end
 end
 
