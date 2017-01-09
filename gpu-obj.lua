@@ -159,7 +159,7 @@ local program = env:program{code = code}
 local f = env:buffer()
 local psi = env:buffer()
 local psiOld = env:buffer()
-local errorBuf = env:buffer()
+local errorBuf = env:buffer{name='errorBuf'}
 
 local rs = {}
 local Rs = {}
@@ -277,33 +277,35 @@ end
 -- doing the error calculation in cpu ...
 local errMem = gcmem.new('real', size*size)
 
+local sumReduce = env:reduce{
+	op = function(x,y) return x..' + '..y end,
+	buffer = errorBuf.buf,
+}
+
+local countBuf = env:buffer{name='count'}
+local count = env:kernel{
+	argsIn = {errorBuf},
+	argsOut = {countBuf},
+	body = [[ count[index] = (real)(errorBuf[index] != 0.); ]]
+}
+
 local smooth = 7
 local h = 1/size
+local accuracy = 1e-10
 for iter=1,200 do
 	psiOld:copyFrom(psi)
 	twoGrid(h, psi, f, size, smooth)
 
 	clcall2D(size, size, calcFrobErr, errorBuf.buf, psi.buf, psiOld.buf)
-	errorBuf:toCPU(errMem)
-	local frobErr = 0
-	for j=0,size*size-1 do
-		frobErr = frobErr + errMem[j]
-	end
-	frobErr = math.sqrt(frobErr)
-	
+	frobErr = math.sqrt(sumReduce(errorBuf.buf))
+
 	clcall2D(size, size, calcRelErr, errorBuf.buf, psi.buf, psiOld.buf)
-	errorBuf:toCPU(errMem)
-	local relErr = 0
-	local n = 0
-	for j=0,size*size-1 do
-		if errMem[j] ~= 0 then
-			relErr = relErr + errMem[j]
-			n = n + 1
-		end
-	end
-	relErr = relErr / n
+	relErr = sumReduce()
+	count()
+	relErr = relErr / sumReduce(countBuf.buf)
 
 	print(iter,'rel', relErr, 'frob', frobErr)
+	if frobErr < accuracy or not math.isfinite(frobErr) then break end
 end
 
 gcmem.free(errMem)
