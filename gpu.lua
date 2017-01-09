@@ -27,9 +27,9 @@ local code = require 'template'([[
 #define size <?=size?>
 typedef <?=real?> real;
 
-__kernel void init(
-	__global real* f,
-	__global real* psi
+kernel void init(
+	global real* f,
+	global real* psi
 ) {
 	int i = get_global_id(0);
 	int j = get_global_id(1);
@@ -49,9 +49,9 @@ __kernel void init(
 
 //doing this on a GPU doesn't guarantee order ...
 //better use Jacobi ...
-__kernel void GaussSeidel(
-	__global real* u,
-	const __global real* f,
+kernel void GaussSeidel(
+	global real* u,
+	const global real* f,
 	real h
 ) {
 	int L = get_global_size(0);
@@ -69,10 +69,10 @@ __kernel void GaussSeidel(
 	u[index] = (f[index] - askew_u) / adiag;
 }
 
-__kernel void calcResidual(
-	__global real* r,
-	const __global real* f,
-	const __global real* u,
+kernel void calcResidual(
+	global real* r,
+	const global real* f,
+	const global real* u,
 	real h
 ) {
 	int L = get_global_size(0);
@@ -91,9 +91,9 @@ __kernel void calcResidual(
 	r[index] = f[index] - a_u;
 }
 
-__kernel void reduceResidual(
-	__global real* R,
-	const __global real* r
+kernel void reduceResidual(
+	global real* R,
+	const global real* r
 ) {
 	int L2 = get_global_size(0);
 	int I = get_global_id(0);
@@ -104,9 +104,9 @@ __kernel void reduceResidual(
 	R[I + L2 * J] = .25 * (r[srci] + r[srci+1] + r[srci+L] + r[srci+L+1]);
 }
 
-__kernel void expandResidual(
-	__global real* v,
-	const __global real* V
+kernel void expandResidual(
+	global real* v,
+	const global real* V
 ) {
 #if 1	//L2-sized kernel
 	int L2 = get_global_size(0);
@@ -128,20 +128,20 @@ __kernel void expandResidual(
 #endif
 }
 
-__kernel void addTo(
+kernel void addTo(
 	size_t n,
-	__global real* u,
-	const __global real* v
+	global real* u,
+	const global real* v
 ) {
 	int i = get_global_id(0);
 	if (i >= n) return;
 	u[i] += v[i];
 }
 
-__kernel void calcRelErr(
-	__global real* errorBuf,
-	const __global real* psi,
-	const __global real* psiOld
+kernel void calcRelErr(
+	global real* errorBuf,
+	const global real* psi,
+	const global real* psiOld
 ) {
 	int i = get_global_id(0);
 	int j = get_global_id(1);
@@ -154,10 +154,10 @@ __kernel void calcRelErr(
 	}
 }
 
-__kernel void calcFrobErr(
-	__global real* errorBuf,
-	const __global real* psi,
-	const __global real* psiOld
+kernel void calcFrobErr(
+	global real* errorBuf,
+	const global real* psi,
+	const global real* psiOld
 ) {
 	int i = get_global_id(0);
 	int j = get_global_id(1);

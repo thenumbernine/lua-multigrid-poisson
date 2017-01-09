@@ -11,29 +11,9 @@ local env = require 'cl.obj.env'{size={size,size}}
 local code = require 'template'([[
 #define size <?=size?>
 
-__kernel void init(
-	__global real* f,
-	__global real* psi
-) {
-	int i = get_global_id(0);
-	int j = get_global_id(1);
-	if (i >= size || j >= size) return;
-	int index = i + size * j;
-	int center = size / 2;
-	real value = 0;
-	if (i == center && j == center) {
-		real charge = 1e+6;
-		const real epsilon0 = 1;
-		value = -charge / epsilon0;
-	}
-	
-	f[index] = value;
-	psi[index] = -f[index];
-}
-
-__kernel void GaussSeidel(
-	__global real* u,
-	const __global real* f,
+kernel void GaussSeidel(
+	global real* u,
+	const global real* f,
 	real h
 ) {
 	int L = get_global_size(0);
@@ -51,10 +31,10 @@ __kernel void GaussSeidel(
 	u[index] = (f[index] - askew_u) / adiag;
 }
 
-__kernel void calcResidual(
-	__global real* r,
-	const __global real* f,
-	const __global real* u,
+kernel void calcResidual(
+	global real* r,
+	const global real* f,
+	const global real* u,
 	real h
 ) {
 	int L = get_global_size(0);
@@ -73,9 +53,9 @@ __kernel void calcResidual(
 	r[index] = f[index] - a_u;
 }
 
-__kernel void reduceResidual(
-	__global real* R,
-	const __global real* r
+kernel void reduceResidual(
+	global real* R,
+	const global real* r
 ) {
 	int L2 = get_global_size(0);
 	int I = get_global_id(0);
@@ -86,11 +66,10 @@ __kernel void reduceResidual(
 	R[I + L2 * J] = .25 * (r[srci] + r[srci+1] + r[srci+L] + r[srci+L+1]);
 }
 
-__kernel void expandResidual(
-	__global real* v,
-	const __global real* V
+kernel void expandResidual(
+	global real* v,
+	const global real* V
 ) {
-#if 1	//L2-sized kernel
 	int L2 = get_global_size(0);
 	int I = get_global_id(0);
 	int J = get_global_id(1);
@@ -98,32 +77,22 @@ __kernel void expandResidual(
 	int L = L2 << 1;
 	int dsti = (I<<1) + L * (J<<1);
 	v[dsti] = v[dsti+1] = v[dsti+L] = v[dsti+L+1] = V[I + L2 * J];
-#else	//L-sized kernel
-	int L = get_global_size(0);
-	int i = get_global_id(0);
-	int j = get_global_id(1);
-	if (i >= L || j >= L) return;
-	int L2 = L >> 1;
-	int I = i >> 1;
-	int J = j >> 1;
-	v[i + L * j] = V[I + L2 * J];
-#endif
 }
 
-__kernel void addTo(
+kernel void addTo(
 	size_t n,
-	__global real* u,
-	const __global real* v
+	global real* u,
+	const global real* v
 ) {
 	int i = get_global_id(0);
 	if (i >= n) return;
 	u[i] += v[i];
 }
 
-__kernel void calcRelErr(
-	__global real* errorBuf,
-	const __global real* psi,
-	const __global real* psiOld
+kernel void calcRelErr(
+	global real* errorBuf,
+	const global real* psi,
+	const global real* psiOld
 ) {
 	int i = get_global_id(0);
 	int j = get_global_id(1);
@@ -136,10 +105,10 @@ __kernel void calcRelErr(
 	}
 }
 
-__kernel void calcFrobErr(
-	__global real* errorBuf,
-	const __global real* psi,
-	const __global real* psiOld
+kernel void calcFrobErr(
+	global real* errorBuf,
+	const global real* psi,
+	const global real* psiOld
 ) {
 	int i = get_global_id(0);
 	int j = get_global_id(1);
@@ -148,39 +117,12 @@ __kernel void calcFrobErr(
 	real d = psi[index] - psiOld[index];
 	errorBuf[index] = d * d;
 }
-
-
 ]], {
 	size = size,
 })
 
 local program = env:program{code = code}
 
-local f = env:buffer()
-local psi = env:buffer()
-local psiOld = env:buffer()
-local errorBuf = env:buffer{name='errorBuf'}
-
-local rs = {}
-local Rs = {}
-local vs = {}
-local Vs = {}
-local domains = {}
-for i=0,math.log(size,2) do
-	local L = 2^i
-	local domain = require 'cl.obj.domain'{env = env, size = {L,L}}
-	domains[L] = domain
-	rs[L] = domain:buffer()
-	Rs[L] = domain:buffer()
-	vs[L] = domain:buffer()
-	Vs[L] = domain:buffer()
-	rs[L]:fill()
-	Rs[L]:fill()
-	vs[L]:fill()
-	Vs[L]:fill()
-end
-
-local init = program:kernel'init'
 local calcFrobErr = program:kernel'calcFrobErr'
 local calcRelErr = program:kernel'calcRelErr'
 local GaussSeidel = program:kernel'GaussSeidel'
@@ -191,121 +133,125 @@ local addTo = program:kernel'addTo'
 
 program:compile()
 
-local function clcall1D(w, kernel, ...)
-	kernel.domain = require 'cl.obj.domain'{env=env, size=w}
-	kernel(...)
-end
+function amrsolve(f,h)
+	local psi = env:buffer{name='psi'}
+	local psiOld = env:buffer()
 
-local function clcall2D(w,h, kernel, ...)
-	kernel.domain = require 'cl.obj.domain'{env=env, size={w,h}}
-	kernel(...)
-end
+	env:kernel{
+		argsIn = {f},
+		argsOut = {psi},
+		body = [[ psi[index] = -f[index]; ]],
+	}()
 
-clcall2D(size, size, init, f.buf, psi.buf)
+	local rs = {}
+	local Rs = {}
+	local vs = {}
+	local Vs = {}
+	local domains = {}
+	for i=0,math.log(size,2) do
+		local L = 2^i
+		local domain = require 'cl.obj.domain'{env = env, size = {L,L}}
+		domains[L] = domain
+		rs[L] = domain:buffer()
+		Rs[L] = domain:buffer()
+		vs[L] = domain:buffer()
+		Vs[L] = domain:buffer()
+		rs[L]:fill()
+		Rs[L]:fill()
+		vs[L]:fill()
+		Vs[L]:fill()
+	end
 
-local function getbuffer(gpuMem, L)
-	local cpuMem = gcmem.new('real', L*L)
-	cmds:enqueueReadBuffer{buffer=gpuMem, block=true, size=L*L*ffi.sizeof(env.real), ptr=cpuMem}
-	return cpuMem
-end
+	local function clcall1D(w, kernel, ...)
+		kernel.domain = require 'cl.obj.domain'{env=env, size=w}
+		kernel(...)
+	end
 
-local function showAndCheck(name, gpuMem, L)
-do return end	
-	local cpuMem = getbuffer(gpuMem, L)
-	print(name)
-	for i=0,L-1 do
-		for j=0,L-1 do
-			io.write(' ',cpuMem[j+L*i])
+	local function clcall2D(w,h, kernel, ...)
+		kernel.domain = require 'cl.obj.domain'{env=env, size={w,h}}
+		kernel(...)
+	end
+
+	local function twoGrid(h, u, f, L, smooth)
+		if L == 1 then
+			--*u = *f / (-4 / h^2)
+			GaussSeidel.domain = domains[L]
+			GaussSeidel(u.buf, f.buf, ffi.new('real[1]', h))
+			return
 		end
-		print()
-	end
-	for i=0,L*L-1 do
-		if not math.isfinite(cpuMem[i]) then
-			error("found a nan")
+		
+		for i=1,smooth do
+			clcall2D(L,L, GaussSeidel, u.buf, f.buf, ffi.new('real[1]', h))
+		end
+		
+		local r = rs[L]
+		clcall2D(L,L, calcResidual, r.buf, f.buf, u.buf, ffi.new('real[1]', h))
+		
+		--r = f - a(u)
+
+		local L2 = L/2
+		local R = Rs[L2]
+		clcall2D(L2,L2, reduceResidual, R.buf, r.buf)
+		
+		local V = Vs[L2]
+		twoGrid(2*h, V, R, L2, smooth)
+
+		local v = vs[L]
+		clcall2D(L2, L2, expandResidual, v.buf, V.buf)
+
+		clcall1D(L*L, addTo, ffi.new('size_t[1]', L*L), u.buf, v.buf)
+
+		for i=1,smooth do
+			clcall2D(L,L, GaussSeidel, u.buf, f.buf, ffi.new('real[1]', h))
 		end
 	end
-	gcmem.free(cpuMem)
+
+	local errorBuf = env:buffer{name='errorBuf'}
+	local sumReduce = env:reduce{
+		op = function(x,y) return x..' + '..y end,
+		buffer = errorBuf.buf,
+	}
+
+	local countBuf = env:buffer{name='count'}
+	local count = env:kernel{
+		argsIn = {errorBuf},
+		argsOut = {countBuf},
+		body = [[ count[index] = (real)(errorBuf[index] != 0.); ]]
+	}
+	
+	local smooth = 7
+	local accuracy = 1e-10
+
+	for iter=1,math.huge do
+		psiOld:copyFrom(psi)
+		twoGrid(h, psi, f, size, smooth)
+
+		clcall2D(size, size, calcFrobErr, errorBuf.buf, psi.buf, psiOld.buf)
+		frobErr = math.sqrt(sumReduce(errorBuf.buf))
+
+		clcall2D(size, size, calcRelErr, errorBuf.buf, psi.buf, psiOld.buf)
+		relErr = sumReduce()
+		count()
+		relErr = relErr / sumReduce(countBuf.buf)
+
+		print(iter,'rel', relErr, 'frob', frobErr)
+		if frobErr < accuracy or not math.isfinite(frobErr) then break end
+		end
 end
 
-local function twoGrid(h, u, f, L, smooth)
-	if L == 1 then
-		--*u = *f / (-4 / h^2)
-showAndCheck('f', f, L, L)
-		clcall2D(L,L,GaussSeidel, u.buf, f.buf, ffi.new('real[1]', h))
-showAndCheck('u', u, L, L)
-		return
-	end
-	
-	for i=1,smooth do
-showAndCheck('f', f, L, L)
-		clcall2D(L,L, GaussSeidel, u.buf, f.buf, ffi.new('real[1]', h))
-showAndCheck('u', u, L, L)
-	end
-	
-	local r = rs[L]
-showAndCheck('f', f, L, L)
-showAndCheck('u', u, L, L)
-	--cmds:enqueueFillBuffer{buffer=r, size=L*L*ffi.sizeof(env.real)}
-	clcall2D(L,L, calcResidual, r.buf, f.buf, u.buf, ffi.new('real[1]', h))
-showAndCheck('r', r, L, L)
-	
-	--r = f - a(u)
-
-	local L2 = L/2
-	local R = Rs[L2]
-	clcall2D(L2,L2, reduceResidual, R.buf, r.buf)
-showAndCheck('R', R, L2, L2)
-	
-	local V = Vs[L2]
-	twoGrid(2*h, V, R, L2, smooth)
-showAndCheck('V', V, L2, L2)
-
-	local v = vs[L]
-	clcall2D(L2, L2, expandResidual, v.buf, V.buf)
-	--clcall2D(L, L, expandResidual, v.buf, V.buf)
-showAndCheck('v', v, L, L)
-
-	clcall1D(L*L, addTo, ffi.new('size_t[1]', L*L), u.buf, v.buf)
-showAndCheck('u', u, L, L)
-
-	for i=1,smooth do
-		clcall2D(L,L, GaussSeidel, u.buf, f.buf, ffi.new('real[1]', h))
-showAndCheck('u', u, L, L)
-	end
-end
-	
--- doing the error calculation in cpu ...
-local errMem = gcmem.new('real', size*size)
-
-local sumReduce = env:reduce{
-	op = function(x,y) return x..' + '..y end,
-	buffer = errorBuf.buf,
-}
-
-local countBuf = env:buffer{name='count'}
-local count = env:kernel{
-	argsIn = {errorBuf},
-	argsOut = {countBuf},
-	body = [[ count[index] = (real)(errorBuf[index] != 0.); ]]
-}
-
-local smooth = 7
 local h = 1/size
-local accuracy = 1e-10
-for iter=1,200 do
-	psiOld:copyFrom(psi)
-	twoGrid(h, psi, f, size, smooth)
-
-	clcall2D(size, size, calcFrobErr, errorBuf.buf, psi.buf, psiOld.buf)
-	frobErr = math.sqrt(sumReduce(errorBuf.buf))
-
-	clcall2D(size, size, calcRelErr, errorBuf.buf, psi.buf, psiOld.buf)
-	relErr = sumReduce()
-	count()
-	relErr = relErr / sumReduce(countBuf.buf)
-
-	print(iter,'rel', relErr, 'frob', frobErr)
-	if frobErr < accuracy or not math.isfinite(frobErr) then break end
-end
-
-gcmem.free(errMem)
+local f = env:buffer{name='f'}
+env:kernel{
+	argsOut = {f},
+	body = [[
+	int2 center = (int2)(size.x/2, size.y/2);	//can't use int4 center = size/2 ...
+	real value = 0;
+	if (i.x == center.x && i.y == center.y) {	//can't use if (i == center) ...
+		real charge = 1e+6;
+		const real epsilon0 = 1;
+		value = -charge / epsilon0;
+	}
+	f[index] = value;
+]],
+}()
+amrsolve(f, h)

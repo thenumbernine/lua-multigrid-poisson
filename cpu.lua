@@ -82,7 +82,6 @@ local function show(name, m, L)
 	end
 end
 
-local accuracy = 1e-10
 local function twoGrid(h, u, f, smooth)
 	local L = #u
 	
@@ -196,6 +195,7 @@ end
 local function amrsolve(f, h)
 	f = matrix(f)
 	local smooth = 7	-- 7 is optimal time for me
+	local accuracy = 1e-10
 	local psi = -f
 	for iter=1,math.huge do
 		local psiOld = matrix(psi)
