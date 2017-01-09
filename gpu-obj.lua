@@ -279,7 +279,7 @@ local errMem = gcmem.new('real', size*size)
 
 local smooth = 7
 local h = 1/size
-for iter=1,20 do
+for iter=1,200 do
 	psiOld:copyFrom(psi)
 	twoGrid(h, psi, f, size, smooth)
 

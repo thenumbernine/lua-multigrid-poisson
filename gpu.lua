@@ -47,6 +47,8 @@ __kernel void init(
 	psi[index] = -f[index];
 }
 
+//doing this on a GPU doesn't guarantee order ...
+//better use Jacobi ...
 __kernel void GaussSeidel(
 	__global real* u,
 	const __global real* f,
@@ -165,6 +167,17 @@ __kernel void calcFrobErr(
 	errorBuf[index] = d * d;
 }
 
+kernel void square(
+	global real* frobBuf,
+	const global real* psi
+) {
+	int i = get_global_id(0);
+	int j = get_global_id(1);
+	if (i >= size || j >= size) return;
+	int index = i + size * j;
+	real d = psi[index];
+	frobBuf[index] = d * d;
+}
 
 ]], {
 	real = real,
@@ -203,13 +216,14 @@ for i=0,math.log(size,2) do
 end
 
 local init = program:kernel'init'
-local calcFrobErr = program:kernel'calcFrobErr'
-local calcRelErr = program:kernel'calcRelErr'
 local GaussSeidel = program:kernel'GaussSeidel'
 local calcResidual = program:kernel'calcResidual'
 local reduceResidual = program:kernel'reduceResidual'
 local expandResidual = program:kernel'expandResidual'
 local addTo = program:kernel'addTo'
+local calcFrobErr = program:kernel'calcFrobErr'
+local calcRelErr = program:kernel'calcRelErr'
+local square = program:kernel'square'
 
 local function clcall1D(w, kernel, ...)
 	kernel:setArgs(...)
@@ -235,7 +249,6 @@ local function getbuffer(gpuMem, L)
 end
 
 local function showAndCheck(name, gpuMem, L)
-do return end	
 	local cpuMem = getbuffer(gpuMem, L)
 	print(name)
 	for i=0,L-1 do
@@ -255,56 +268,68 @@ end
 local function twoGrid(h, u, f, L, smooth)
 	if L == 1 then
 		--*u = *f / (-4 / h^2)
-showAndCheck('f', f, L, L)
+--showAndCheck('f', f, L, L)
 		clcall2D(L,L,GaussSeidel, u, f, ffi.new('real[1]', h))
-showAndCheck('u', u, L, L)
+--showAndCheck('u', u, L, L)
 		return
 	end
 	
 	for i=1,smooth do
-showAndCheck('f', f, L, L)
+--if L==size then print('smooth',i) end
+--if L==size then showAndCheck('f', f, L, L) end
 		clcall2D(L,L, GaussSeidel, u, f, ffi.new('real[1]', h))
-showAndCheck('u', u, L, L)
+--if L==size then showAndCheck('u', u, L, L) end
 	end
 	
 	local r = rs[L]
-showAndCheck('f', f, L, L)
-showAndCheck('u', u, L, L)
+--showAndCheck('f', f, L, L)
+--showAndCheck('u', u, L, L)
 	--cmds:enqueueFillBuffer{buffer=r, size=L*L*ffi.sizeof(real)}
 	clcall2D(L,L, calcResidual, r, f, u, ffi.new('real[1]', h))
-showAndCheck('r', r, L, L)
+--showAndCheck('r', r, L, L)
 	
 	--r = f - a(u)
 
 	local L2 = L/2
 	local R = Rs[L2]
 	clcall2D(L2,L2, reduceResidual, R, r)
-showAndCheck('R', R, L2, L2)
+--showAndCheck('R', R, L2, L2)
 	
 	local V = Vs[L2]
 	twoGrid(2*h, V, R, L2, smooth)
-showAndCheck('V', V, L2, L2)
+--showAndCheck('V', V, L2, L2)
 
 	local v = vs[L]
 	clcall2D(L2, L2, expandResidual, v, V)
 	--clcall2D(L, L, expandResidual, v, V)
-showAndCheck('v', v, L, L)
+--showAndCheck('v', v, L, L)
 
 	clcall1D(L*L, addTo, ffi.new('size_t[1]', L*L), u, v)
-showAndCheck('u', u, L, L)
+--showAndCheck('u', u, L, L)
 
 	for i=1,smooth do
 		clcall2D(L,L, GaussSeidel, u, f, ffi.new('real[1]', h))
-showAndCheck('u', u, L, L)
+--showAndCheck('u', u, L, L)
 	end
 end
 	
 -- doing the error calculation in cpu ...
 local errMem = gcmem.new('real', size*size)
 
+do
+	clcall2D(size, size, square, errorBuf, f)
+	cmds:enqueueReadBuffer{buffer=errorBuf, block=true, size=size*size*ffi.sizeof(real), ptr=errMem}
+	local frobNorm = 0
+	for j=0,size*size-1 do
+		frobNorm = frobNorm + errMem[j]
+	end
+	frobNorm = math.sqrt(frobNorm)
+	print('|del.E|', frobNorm)	-- this matches cpu.lua
+end
+
 local smooth = 7
 local h = 1/size
-for iter=1,20 do
+for iter=1,200 do
 	cmds:enqueueCopyBuffer{src=psi, dst=psiOld, size=size*size*ffi.sizeof(real)}
 	twoGrid(h, psi, f, size, smooth)
 
@@ -317,18 +342,33 @@ for iter=1,20 do
 	frobErr = math.sqrt(frobErr)
 	
 	clcall2D(size, size, calcRelErr, errorBuf, psi, psiOld)
-	cmds:enqueueReadBuffer{buffer=errorBuf, block=true, size=size*size*ffi.sizeof(real), ptr=errMem}
+	cmds:enqueueReadBuffer{
+		buffer = errorBuf,
+		block = true,
+		size = size * size * ffi.sizeof(real),
+		ptr = errMem,
+	}
+--local psiMem = ffi.new('real[?]', size*size)
+--cmds:enqueueReadBuffer{buffer = psi, ptr = psiMem, block = true, size = size * size * ffi.sizeof(real)}
+--local psiOldMem = ffi.new('real[?]', size*size)
+--cmds:enqueueReadBuffer{buffer = psiOld, ptr = psiOldMem, block = true, size = size * size * ffi.sizeof(real)}
+-- looks like after one iteration
+-- the CPU goes 10000 -> 1846.015020895
+-- the GPU goes 10000 -> 23890.132632578
+-- so the iteration algorithm is off	
 	local relErr = 0
 	local n = 0
 	for j=0,size*size-1 do
 		if errMem[j] ~= 0 then
 			relErr = relErr + errMem[j]
+--print('adding error from i,j',j%size,math.floor(j/size),'psi',psiMem[j],'psiOld',psiOldMem[j],'relErr',math.abs(1 - psiMem[j] / psiOldMem[j]))
 			n = n + 1
 		end
 	end
 	relErr = relErr / n
 
-	print(iter,'rel', relErr, 'frob', frobErr)
+	print(iter,'rel', relErr, 'of n',n,'frob', frobErr)
+--do break end
 end
 
 gcmem.free(errMem)

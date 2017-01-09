@@ -36,6 +36,23 @@ local function GaussSeidel(h, u, f)
 	end
 end
 
+local function Jacobi(h, u, f)
+	local L = #u
+	local lastU = matrix(u)
+	for i=1,L do
+		for j=1,L do
+			local u_xl = i > 1 and lastU[i-1][j] or 0--lastU[i][j]
+			local u_xr = i < L and lastU[i+1][j] or 0--lastU[i][j]
+			local u_yl = j > 1 and lastU[i][j-1] or 0--lastU[i][j]
+			local u_yr = j < L and lastU[i][j+1] or 0--lastU[i][j]
+			local askew_u = (u_xl + u_xr + u_yl + u_yr) / h^2
+			local adiag = -4 / h^2
+			u[i][j] = (f[i][j] - askew_u) / adiag
+		end
+	end
+end
+
+
 -- in-place Jacobi (using a temp buffer)
 local function Jacobi(h, u, f)
 	local L = #u
@@ -56,7 +73,6 @@ local function Jacobi(h, u, f)
 end
 
 local function show(name, m, L)
-do return end
 	print(name)
 	for i=1,L do
 		for j=1,L do
@@ -84,21 +100,23 @@ local function twoGrid(h, u, f, smooth)
 		end
 		local askew_u = (u_xl + u_xr + u_yl + u_yr) / h^2
 		local adiag = -4 / h^2
-show('f', f, L)
+--show('f', f, L)
 		u[1][1] = (f[1][1] - askew_u) / adiag 
-show('u', u, L)
+--show('u', u, L)
 		return
 	end
 
 	for i=1,smooth do
-show('f', f, L)
+--if L==size[1] then print('smooth',i) end
+--if L==size[1] then show('f', f, L) end
 		GaussSeidel(h, u, f)
-show('u', u, L)
+		--Jacobi(h, u, f)
+--if L==size[1] then show('u', u, L) end
 	end
 
 	-- r = f - del^2 u
-show('f', f, L)
-show('u', u, L)
+--show('f', f, L)
+--show('u', u, L)
 	local r = matrix.zeros(L,L)
 	for i=1,L do
 		for j=1,L do
@@ -112,7 +130,7 @@ show('u', u, L)
 			r[i][j] = f[i][j] - a_u
 		end
 	end
-show('r', r, L)
+--show('r', r, L)
 	
 	-- del^2 V = R
 	local L2 = L/2
@@ -124,11 +142,11 @@ show('r', r, L)
 			R[I][J] = (r[i][j] + r[i+1][j] + r[i][j+1] + r[i+1][j+1]) / 4
 		end
 	end
-show('R', R, L2)
+--show('R', R, L2)
 
 	local V = matrix.zeros(L2, L2)
 	twoGrid(2*h, V, R, smooth)
-show('V', V, L2)
+--show('V', V, L2)
 
 	local v = matrix.zeros(L, L)
 	for I=1,L2 do
@@ -139,7 +157,7 @@ show('V', V, L2)
 			v[i][j], v[i+1][j], v[i][j+1], v[i+1][j+1] = value, value, value, value
 		end
 	end
-show('V', V, L2)
+--show('V', V, L2)
 
 	-- correct u
 	for i=1,L do
@@ -147,11 +165,12 @@ show('V', V, L2)
 			u[i][j] = u[i][j] + v[i][j]
 		end
 	end
-show('u', u, L)
+--show('u', u, L)
 
 	for i=1,smooth do
 		GaussSeidel(h, u, f)
-show('u', u, L)
+		--Jacobi(h, u, f)
+--show('u', u, L)
 	end
 end
 
@@ -163,6 +182,7 @@ local function relativeError(psi, psiOld)
 		for j=2,L+1 do
 			if psiOld[i][j] ~= 0 then
 				if psiOld[i][j] ~= psi[i][j] then
+--print('adding error from i,j',i,j,'psi',psi[i][j],'psiOld',psiOld[i][j],'relErr',math.abs(1 - psi[i][j] / psiOld[i][j]))
 					err = err + math.abs(1 - psi[i][j] / psiOld[i][j])
 					n = n + 1
 				end
@@ -170,7 +190,7 @@ local function relativeError(psi, psiOld)
 		end
 	end
 	if n > 0 then err = err / n end
-	return err
+	return err, n
 end
 
 local function amrsolve(f, h)
@@ -181,8 +201,9 @@ local function amrsolve(f, h)
 		local psiOld = matrix(psi)
 		twoGrid(h, psi, f, smooth)
 		local frobErr = (psi - psiOld):norm()
-		local relErr = relativeError(psi, psiOld)
-		print(iter,'rel', relErr, 'frob', frobErr)
+		local relErr, n = relativeError(psi, psiOld)
+		print(iter,'rel', relErr, 'of n',n,'frob', frobErr)
+--do break end
 		if frobErr < accuracy or not math.isfinite(frobErr) then break end
 	end
 	return psi
@@ -223,7 +244,7 @@ end
 local log2L = ... and tonumber(...) or 4
 local L = bit.lshift(1,log2L)
 local h = 1 / (L + 1)
-local size = matrix{L,L}
+size = matrix{L,L}
 local center = size/2
 
 --[[ using a real vector field
