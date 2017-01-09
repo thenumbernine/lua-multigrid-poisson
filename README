@@ -1,3 +1,4 @@
 multigrid Poisson solver
-test.lua is the cpu version
-gpu.lua is the (NOT WORKING) gpu version
+test.lua is the cpu version, which operates on Gauss-Seidel (much more improved than it does on Jacobi)
+gpu.lua is the gpu version, based on my "require 'cl'", which can't use Gauss-Seidel (since you can't tell when the neighbors will be updated) but whose Gauss-Seidel-ish implementation still beats Jacobi.
+gpu-obj.lua is the gpu version based on my "erquire cl.obj'", which is aimed at being more concise than gpu.lua
