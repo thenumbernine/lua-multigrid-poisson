@@ -36,6 +36,7 @@ local function GaussSeidel(h, u, f)
 	end
 end
 
+-- in-place Jacobi (using a temp buffer)
 local function Jacobi(h, u, f)
 	local L = #u
 	local lastU = matrix(u)
@@ -52,25 +53,8 @@ local function Jacobi(h, u, f)
 	end
 end
 
-
--- in-place Jacobi (using a temp buffer)
-local function Jacobi(h, u, f)
-	local L = #u
-	local newU = matrix.lambda({L,L}, function(i,j)
-		local u_xl = i > 1 and u[i-1][j] or 0--u[i][j]
-		local u_xr = i < L and u[i+1][j] or 0--u[i][j]
-		local u_yl = j > 1 and u[i][j-1] or 0--u[i][j]
-		local u_yr = j < L and u[i][j+1] or 0--u[i][j]
-		local askew_u = (u_xl + u_xr + u_yl + u_yr) / h^2
-		local adiag = -4 / h^2
-		return (f[i][j] - askew_u) / adiag
-	end)
-	for i=1,L do
-		for j=1,L do
-			u[i][j] = newU[i][j]
-		end
-	end
-end
+--local inPlaceIterativeSolver = GaussSeidel
+local inPlaceIterativeSolver = Jacobi
 
 local function show(name, m, L)
 	print(name)
@@ -108,8 +92,7 @@ local function twoGrid(h, u, f, smooth)
 	for i=1,smooth do
 --if L==size[1] then print('smooth',i) end
 --if L==size[1] then show('f', f, L) end
-		GaussSeidel(h, u, f)
-		--Jacobi(h, u, f)
+		inPlaceIterativeSolver(h, u, f)
 --if L==size[1] then show('u', u, L) end
 	end
 
@@ -167,8 +150,7 @@ local function twoGrid(h, u, f, smooth)
 --show('u', u, L)
 
 	for i=1,smooth do
-		GaussSeidel(h, u, f)
-		--Jacobi(h, u, f)
+		inPlaceIterativeSolver(h, u, f)
 --show('u', u, L)
 	end
 end
@@ -192,6 +174,7 @@ local function relativeError(psi, psiOld)
 	return err, n
 end
 
+--local printInfo = table()
 local function amrsolve(f, h)
 	f = matrix(f)
 	local smooth = 7	-- 7 is optimal time for me
@@ -202,7 +185,7 @@ local function amrsolve(f, h)
 		twoGrid(h, psi, f, smooth)
 		local frobErr = (psi - psiOld):norm()
 		local relErr, n = relativeError(psi, psiOld)
-		print(iter,'rel', relErr, 'of n',n,'frob', frobErr)
+--printInfo:insert{iter,'rel', relErr, 'of n',n,'frob', frobErr}
 --do break end
 		if frobErr < accuracy or not math.isfinite(frobErr) then break end
 	end
@@ -279,11 +262,16 @@ local f = matrix.lambda(size, function(...)
 	return (i - center - {1,1}):normLInf() < 1 and Q or 0
 end)
 --]=]
-print('|del.E|',f:norm())
+--print('|del.E|',f:norm())
 
 -- psi = del^-2 f
+local startTime = os.clock()
 local psi = amrsolve(f, h)
-print('|del^-1.E|', psi:norm())
+local endTime = os.clock()
+--printInfo:map(function(l) print(table.unpack(l)) end)
+print('time taken: '..(endTime - startTime))
+
+--print('|del^-1.E|', psi:norm())
 
 --[[
 -- curlfree E = del psi = del

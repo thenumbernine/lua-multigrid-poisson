@@ -1,12 +1,35 @@
 #! /usr/bin/env luajit
 
+-- 2^5 x 2^5 is diverging 
+
 local ffi = require 'ffi'
+local bit = require 'bit'
 require 'ext'
 local gcmem = require 'ext.gcmem'
 
-local size = 16
+local log2size = ... and tonumber(...) or 4
+local size = bit.lshift(1, log2size)
 
 local env = require 'cl.obj.env'{size={size,size}}
+
+local function getn(...)
+	local t = {...}
+	t.n = select('#', ...)
+	return t
+end
+
+local function time(name, f, ...)
+--[[	
+	local startTime = os.clock()
+	local result = getn(f(...))
+	local endTime = os.clock()
+	print(name, endTime - startTime)
+	return table.unpack(result, result.n)
+--]]
+-- [[
+	return f(...)
+--]]
+end
 
 local code = require 'template'([[
 #define size <?=size?>
@@ -133,6 +156,8 @@ local addTo = program:kernel'addTo'
 
 program:compile()
 
+--local printInfo = table()
+
 function amrsolve(f,h)
 	local psi = env:buffer{name='psi'}
 	local psiOld = env:buffer()
@@ -194,7 +219,7 @@ function amrsolve(f,h)
 		clcall2D(L2,L2, reduceResidual, R.buf, r.buf)
 		
 		local V = Vs[L2]
-		twoGrid(2*h, V, R, L2, smooth)
+		time('twoGrid', twoGrid, 2*h, V, R, L2, smooth)
 
 		local v = vs[L]
 		clcall2D(L2, L2, expandResidual, v.buf, V.buf)
@@ -224,7 +249,7 @@ function amrsolve(f,h)
 
 	for iter=1,math.huge do
 		psiOld:copyFrom(psi)
-		twoGrid(h, psi, f, size, smooth)
+		time('twoGrid', twoGrid, h, psi, f, size, smooth)
 
 		clcall2D(size, size, calcFrobErr, errorBuf.buf, psi.buf, psiOld.buf)
 		frobErr = math.sqrt(sumReduce(errorBuf.buf))
@@ -234,12 +259,13 @@ function amrsolve(f,h)
 		count()
 		relErr = relErr / sumReduce(countBuf.buf)
 
-		print(iter,'rel', relErr, 'frob', frobErr)
+--printInfo:insert{iter,'rel', relErr, 'frob', frobErr}
+print(iter,'rel', relErr, 'frob', frobErr)
 		if frobErr < accuracy or not math.isfinite(frobErr) then break end
-		end
+	end
 end
 
-local h = 1/size
+local h = 1/(size+1)
 local f = env:buffer{name='f'}
 env:kernel{
 	argsOut = {f},
@@ -254,4 +280,7 @@ env:kernel{
 	f[index] = value;
 ]],
 }()
-amrsolve(f, h)
+
+time('amrsolve', amrsolve,f, h)
+--printInfo:map(function(l) print(table.unpack(l)) end)
+
