@@ -22,7 +22,8 @@ local cmds = require 'cl.commandqueue'{context=ctx, device=device}
 local real = fp64 and 'double' or 'float'
 print('using real',real)
 
-local size = 16
+local log2size = ... and tonumber(...) or 4
+local size = bit.lshift(1, log2size)
 local code = require 'template'([[
 #define size <?=size?>
 typedef <?=real?> real;
