@@ -186,6 +186,7 @@ local function amrsolve(f, h)
 		local frobErr = (psi - psiOld):norm()
 		local relErr, n = relativeError(psi, psiOld)
 --printInfo:insert{iter,'rel', relErr, 'of n',n,'frob', frobErr}
+print(iter,'rel', relErr, 'of n',n,'frob', frobErr)
 --do break end
 		if frobErr < accuracy or not math.isfinite(frobErr) then break end
 	end

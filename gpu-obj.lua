@@ -175,7 +175,7 @@ function amrsolve(f,h)
 	local domains = {}
 	for i=0,math.log(size,2) do
 		local L = 2^i
-		local domain = require 'cl.obj.domain'{env = env, size = {L,L}}
+		local domain = env:domain{size = {L,L}}
 		domains[L] = domain
 		rs[L] = domain:buffer()
 		Rs[L] = domain:buffer()
@@ -188,12 +188,12 @@ function amrsolve(f,h)
 	end
 
 	local function clcall1D(w, kernel, ...)
-		kernel.domain = require 'cl.obj.domain'{env=env, size=w}
+		kernel.domain = env:domain{size=w}
 		kernel(...)
 	end
 
 	local function clcall2D(w,h, kernel, ...)
-		kernel.domain = require 'cl.obj.domain'{env=env, size={w,h}}
+		kernel.domain = env:domain{size={w,h}}
 		kernel(...)
 	end
 
@@ -201,40 +201,40 @@ function amrsolve(f,h)
 		if L == 1 then
 			--*u = *f / (-4 / h^2)
 			GaussSeidel.domain = domains[L]
-			GaussSeidel(u.buf, f.buf, ffi.new('real[1]', h))
+			GaussSeidel(u.obj, f.obj, ffi.new('real[1]', h))
 			return
 		end
 		
 		for i=1,smooth do
-			clcall2D(L,L, GaussSeidel, u.buf, f.buf, ffi.new('real[1]', h))
+			clcall2D(L,L, GaussSeidel, u.obj, f.obj, ffi.new('real[1]', h))
 		end
 		
 		local r = rs[L]
-		clcall2D(L,L, calcResidual, r.buf, f.buf, u.buf, ffi.new('real[1]', h))
+		clcall2D(L,L, calcResidual, r.obj, f.obj, u.obj, ffi.new('real[1]', h))
 		
 		--r = f - a(u)
 
 		local L2 = L/2
 		local R = Rs[L2]
-		clcall2D(L2,L2, reduceResidual, R.buf, r.buf)
+		clcall2D(L2,L2, reduceResidual, R.obj, r.obj)
 		
 		local V = Vs[L2]
 		time('twoGrid', twoGrid, 2*h, V, R, L2, smooth)
 
 		local v = vs[L]
-		clcall2D(L2, L2, expandResidual, v.buf, V.buf)
+		clcall2D(L2, L2, expandResidual, v.obj, V.obj)
 
-		clcall1D(L*L, addTo, ffi.new('size_t[1]', L*L), u.buf, v.buf)
+		clcall1D(L*L, addTo, ffi.new('size_t[1]', L*L), u.obj, v.obj)
 
 		for i=1,smooth do
-			clcall2D(L,L, GaussSeidel, u.buf, f.buf, ffi.new('real[1]', h))
+			clcall2D(L,L, GaussSeidel, u.obj, f.obj, ffi.new('real[1]', h))
 		end
 	end
 
 	local errorBuf = env:buffer{name='errorBuf'}
 	local sumReduce = env:reduce{
 		op = function(x,y) return x..' + '..y end,
-		buffer = errorBuf.buf,
+		buffer = errorBuf.obj,
 	}
 
 	local countBuf = env:buffer{name='count'}
@@ -251,13 +251,13 @@ function amrsolve(f,h)
 		psiOld:copyFrom(psi)
 		time('twoGrid', twoGrid, h, psi, f, size, smooth)
 
-		clcall2D(size, size, calcFrobErr, errorBuf.buf, psi.buf, psiOld.buf)
-		frobErr = math.sqrt(sumReduce(errorBuf.buf))
+		clcall2D(size, size, calcFrobErr, errorBuf.obj, psi.obj, psiOld.obj)
+		frobErr = math.sqrt(sumReduce(errorBuf.obj))
 
-		clcall2D(size, size, calcRelErr, errorBuf.buf, psi.buf, psiOld.buf)
+		clcall2D(size, size, calcRelErr, errorBuf.obj, psi.obj, psiOld.obj)
 		relErr = sumReduce()
 		count()
-		relErr = relErr / sumReduce(countBuf.buf)
+		relErr = relErr / sumReduce(countBuf.obj)
 
 --printInfo:insert{iter,'rel', relErr, 'frob', frobErr}
 print(iter,'rel', relErr, 'frob', frobErr)
