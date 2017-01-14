@@ -18,19 +18,6 @@ local function getn(...)
 	return t
 end
 
-local function time(name, f, ...)
---[[	
-	local startTime = os.clock()
-	local result = getn(f(...))
-	local endTime = os.clock()
-	print(name, endTime - startTime)
-	return table.unpack(result, result.n)
---]]
--- [[
-	return f(...)
---]]
-end
-
 local code = require 'template'([[
 #define size <?=size?>
 
@@ -219,7 +206,7 @@ function amrsolve(f,h)
 		clcall2D(L2,L2, reduceResidual, R.obj, r.obj)
 		
 		local V = Vs[L2]
-		time('twoGrid', twoGrid, 2*h, V, R, L2, smooth)
+		twoGrid(2*h, V, R, L2, smooth)
 
 		local v = vs[L]
 		clcall2D(L2, L2, expandResidual, v.obj, V.obj)
@@ -249,7 +236,7 @@ function amrsolve(f,h)
 
 	for iter=1,math.huge do
 		psiOld:copyFrom(psi)
-		time('twoGrid', twoGrid, h, psi, f, size, smooth)
+		twoGrid(h, psi, f, size, smooth)
 
 		clcall2D(size, size, calcFrobErr, errorBuf.obj, psi.obj, psiOld.obj)
 		frobErr = math.sqrt(sumReduce(errorBuf.obj))
@@ -281,6 +268,9 @@ env:kernel{
 ]],
 }()
 
-time('amrsolve', amrsolve,f, h)
+local startTime = os.clock()
+amrsolve(f, h)
+local endTime = os.clock()
+print('time taken: '..(endTime - startTime))
 --printInfo:map(function(l) print(table.unpack(l)) end)
 
