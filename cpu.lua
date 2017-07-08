@@ -12,6 +12,9 @@ del^2 u = f
 a_ij = 1/h^2 -4/h^2 1/h^2
 --]]
 
+-- output all data in a way that I can compare it with the gpu versions
+local debugging = true
+
 local matrix = require 'matrix'
 
 local function time(f, ...)
@@ -57,6 +60,7 @@ end
 local inPlaceIterativeSolver = Jacobi
 
 local function show(name, m, L)
+	if not debugging then return end
 	print(name)
 	for i=1,L do
 		for j=1,L do
@@ -83,22 +87,25 @@ local function twoGrid(h, u, f, smooth)
 		end
 		local askew_u = (u_xl + u_xr + u_yl + u_yr) / h^2
 		local adiag = -4 / h^2
---show('f', f, L)
+show('f', f, L)
 		u[1][1] = (f[1][1] - askew_u) / adiag 
---show('u', u, L)
+show('u', u, L)
 		return
 	end
 
 	for i=1,smooth do
---if L==size[1] then print('smooth',i) end
---if L==size[1] then show('f', f, L) end
+if debugging and L==size[1] then
+	print('smooth',i)
+	print('h', h)
+	show('f', f, L)
+end
 		inPlaceIterativeSolver(h, u, f)
---if L==size[1] then show('u', u, L) end
+if L==size[1] then show('u', u, L) end
 	end
 
 	-- r = f - del^2 u
---show('f', f, L)
---show('u', u, L)
+show('f', f, L)
+show('u', u, L)
 	local r = matrix.zeros(L,L)
 	for i=1,L do
 		for j=1,L do
@@ -112,7 +119,7 @@ local function twoGrid(h, u, f, smooth)
 			r[i][j] = f[i][j] - a_u
 		end
 	end
---show('r', r, L)
+show('r', r, L)
 	
 	-- del^2 V = R
 	local L2 = L/2
@@ -124,11 +131,11 @@ local function twoGrid(h, u, f, smooth)
 			R[I][J] = (r[i][j] + r[i+1][j] + r[i][j+1] + r[i+1][j+1]) / 4
 		end
 	end
---show('R', R, L2)
+show('R', R, L2)
 
 	local V = matrix.zeros(L2, L2)
 	twoGrid(2*h, V, R, smooth)
---show('V', V, L2)
+show('V', V, L2)
 
 	local v = matrix.zeros(L, L)
 	for I=1,L2 do
@@ -139,7 +146,7 @@ local function twoGrid(h, u, f, smooth)
 			v[i][j], v[i+1][j], v[i][j+1], v[i+1][j+1] = value, value, value, value
 		end
 	end
---show('V', V, L2)
+show('V', V, L2)
 
 	-- correct u
 	for i=1,L do
@@ -147,14 +154,16 @@ local function twoGrid(h, u, f, smooth)
 			u[i][j] = u[i][j] + v[i][j]
 		end
 	end
---show('u', u, L)
+show('u', u, L)
 
 	for i=1,smooth do
 		inPlaceIterativeSolver(h, u, f)
---show('u', u, L)
+show('u', u, L)
 	end
 end
 
+-- hmm, do implementations really use this function?
+-- I'm going to use a different error function
 local function relativeError(psi, psiOld)
 	local L = #psi - 2
 	local err = 0
@@ -174,21 +183,35 @@ local function relativeError(psi, psiOld)
 	return err, n
 end
 
+
+--print('#iter', 'relErr', 'n', 'frobErr')
+print('#iter', 'err')
 --local printInfo = table()
 local function amrsolve(f, h)
-	f = matrix(f)
+	f = matrix(f)		-- make a copy because we're going to modify in-place
 	local smooth = 7	-- 7 is optimal time for me
 	local accuracy = 1e-10
-	local psi = -f
+	local psi = -f		-- initialize psi
 	for iter=1,math.huge do
 		local psiOld = matrix(psi)
 		twoGrid(h, psi, f, smooth)
+		
+
+--[[
+		-- compute the error between psi and psiOld
 		local frobErr = (psi - psiOld):norm()
 		local relErr, n = relativeError(psi, psiOld)
 --printInfo:insert{iter,'rel', relErr, 'of n',n,'frob', frobErr}
-print(iter,'rel', relErr, 'of n',n,'frob', frobErr)
+--print(iter,'rel', relErr, 'of n',n,'frob', frobErr)
+print(iter, relErr, n, frobErr)
 --do break end
 		if frobErr < accuracy or not math.isfinite(frobErr) then break end
+--]]
+-- [[	use error scaled by size
+		local err = math.sqrt((psi - psiOld):normSq() / psi:size():prod())
+print(iter, err)
+		if err < accuracy or not math.isfinite(err) then break end
+--]]
 	end
 	return psi
 end
@@ -227,7 +250,7 @@ end
 
 local log2L = ... and tonumber(...) or 4
 local L = bit.lshift(1,log2L)
-local h = 1 / (L + 1)
+local h = 1 / L
 size = matrix{L,L}
 local center = size/2
 
@@ -270,7 +293,7 @@ local startTime = os.clock()
 local psi = amrsolve(f, h)
 local endTime = os.clock()
 --printInfo:map(function(l) print(table.unpack(l)) end)
-print('time taken: '..(endTime - startTime))
+io.stderr:write('time taken: '..(endTime - startTime)..'\n')
 
 --print('|del^-1.E|', psi:norm())
 

@@ -4,6 +4,8 @@ local ffi = require 'ffi'
 require 'ext'
 local gcmem = require 'ext.gcmem'
 
+local debugging = true
+
 local function get64bit(list)
 	local best = list:map(function(item)
 		local exts = item:getExtensions():lower():trim()
@@ -20,8 +22,9 @@ local ctx = require 'cl.context'{platform=platform, device=device}
 local cmds = require 'cl.commandqueue'{context=ctx, device=device}
 
 local real = fp64 and 'double' or 'float'
-print('using real',real)
+--print('using real',real)
 
+-- log2 size = 5 diverges for gpu ...
 local log2size = ... and tonumber(...) or 4
 local size = bit.lshift(1, log2size)
 local code = require 'template'([[
@@ -68,6 +71,27 @@ kernel void GaussSeidel(
 	real askew_u = (u_xl + u_xr + u_yl + u_yr) / hSq;
 	real adiag = -4. / hSq;
 	u[index] = (f[index] - askew_u) / adiag;
+}
+
+kernel void Jacobi(
+	global real* destU,
+	const global real* u,
+	const global real* f,
+	real h
+) {
+	int L = get_global_size(0);
+	int i = get_global_id(0);
+	int j = get_global_id(1);
+	if (i >= L || j >= L) return;
+	int index = i + L * j;
+	real u_xl = i > 0 ? u[(i-1) + L * j] : 0;
+	real u_xr = i < L-1 ? u[(i+1) + L * j] : 0;
+	real u_yl = j > 0 ? u[i + L * (j-1)] : 0;
+	real u_yr = j < L-1 ? u[i + L * (j+1)] : 0;
+	real hSq = h * h;
+	real askew_u = (u_xl + u_xr + u_yl + u_yr) / hSq;
+	real adiag = -4. / hSq;
+	destU[index] = (f[index] - askew_u) / adiag;
 }
 
 kernel void calcResidual(
@@ -199,6 +223,8 @@ local f = ctx:buffer{rw=true, size=size*size*ffi.sizeof(real)}
 local psi = ctx:buffer{rw=true, size=size*size*ffi.sizeof(real)}
 local psiOld = ctx:buffer{rw=true, size=size*size*ffi.sizeof(real)}
 local errorBuf = ctx:buffer{rw=true, size=size*size*ffi.sizeof(real)}
+-- same size as psi, used for jacobi iteration
+local tmpU = ctx:buffer{rw=true, size=size*size*ffi.sizeof(real)}
 
 local rs = {}
 local Rs = {}
@@ -218,6 +244,7 @@ end
 
 local init = program:kernel'init'
 local GaussSeidel = program:kernel'GaussSeidel'
+local Jacobi = program:kernel'Jacobi'
 local calcResidual = program:kernel'calcResidual'
 local reduceResidual = program:kernel'reduceResidual'
 local expandResidual = program:kernel'expandResidual'
@@ -250,6 +277,7 @@ local function getbuffer(gpuMem, L)
 end
 
 local function showAndCheck(name, gpuMem, L)
+	if not debugging then return end	
 	local cpuMem = getbuffer(gpuMem, L)
 	print(name)
 	for i=0,L-1 do
@@ -265,52 +293,66 @@ local function showAndCheck(name, gpuMem, L)
 	end
 	gcmem.free(cpuMem)
 end
+		
+local function inPlaceIterativeSolver(L, u, f, h)
+	--[[ Gauss-Seidel
+	clcall2D(L,L,GaussSeidel, u, f, ffi.new('real[1]', h))
+	--]]
+	-- [[ Jacobi
+	clcall2D(L,L,Jacobi, tmpU, u, f, ffi.new('real[1]', h))
+	cmds:enqueueCopyBuffer{src=tmpU, dst=u, size=L*L*ffi.sizeof(real)}
+	--]]
+
+end
 
 local function twoGrid(h, u, f, L, smooth)
 	if L == 1 then
 		--*u = *f / (-4 / h^2)
---showAndCheck('f', f, L, L)
-		clcall2D(L,L,GaussSeidel, u, f, ffi.new('real[1]', h))
---showAndCheck('u', u, L, L)
+showAndCheck('f', f, L, L)
+		inPlaceIterativeSolver(L, u, f, h)
+showAndCheck('u', u, L, L)
 		return
 	end
 	
 	for i=1,smooth do
---if L==size then print('smooth',i) end
---if L==size then showAndCheck('f', f, L, L) end
-		clcall2D(L,L, GaussSeidel, u, f, ffi.new('real[1]', h))
---if L==size then showAndCheck('u', u, L, L) end
+if debugging and L==size then
+	print('smooth',i) 
+	print('h', h)
+	showAndCheck('f', f, L, L) 
+end
+		inPlaceIterativeSolver(L, u, f, h)
+showAndCheck('u', u, L, L)
 	end
 	
 	local r = rs[L]
---showAndCheck('f', f, L, L)
---showAndCheck('u', u, L, L)
+showAndCheck('f', f, L, L)
+showAndCheck('u', u, L, L)
 	--cmds:enqueueFillBuffer{buffer=r, size=L*L*ffi.sizeof(real)}
 	clcall2D(L,L, calcResidual, r, f, u, ffi.new('real[1]', h))
---showAndCheck('r', r, L, L)
+showAndCheck('r', r, L, L)
 	
 	--r = f - a(u)
 
 	local L2 = L/2
 	local R = Rs[L2]
 	clcall2D(L2,L2, reduceResidual, R, r)
---showAndCheck('R', R, L2, L2)
+showAndCheck('R', R, L2, L2)
 	
 	local V = Vs[L2]
 	twoGrid(2*h, V, R, L2, smooth)
---showAndCheck('V', V, L2, L2)
+showAndCheck('V', V, L2, L2)
 
 	local v = vs[L]
 	clcall2D(L2, L2, expandResidual, v, V)
 	--clcall2D(L, L, expandResidual, v, V)
---showAndCheck('v', v, L, L)
+showAndCheck('v', v, L, L)
 
 	clcall1D(L*L, addTo, ffi.new('size_t[1]', L*L), u, v)
---showAndCheck('u', u, L, L)
+showAndCheck('u', u, L, L)
 
 	for i=1,smooth do
-		clcall2D(L,L, GaussSeidel, u, f, ffi.new('real[1]', h))
---showAndCheck('u', u, L, L)
+		inPlaceIterativeSolver(L, u, f, h)
+showAndCheck('u', u, L, L)
 	end
 end
 	
@@ -325,18 +367,21 @@ do
 		frobNorm = frobNorm + errMem[j]
 	end
 	frobNorm = math.sqrt(frobNorm)
-	print('|del.E|', frobNorm)	-- this matches cpu.lua
+	--print('|del.E|', frobNorm)	-- this matches cpu.lua
 end
 
 local smooth = 7
 local h = 1/size
 local accuracy = 1e-10
-for iter=1,200 do
+--print('#iter','relErr','n','frobErr')
+print('#iter','err')
+for iter=1,math.huge do
 	cmds:enqueueCopyBuffer{src=psi, dst=psiOld, size=size*size*ffi.sizeof(real)}
 	twoGrid(h, psi, f, size, smooth)
 
 	clcall2D(size, size, calcFrobErr, errorBuf, psi, psiOld)
 	cmds:enqueueReadBuffer{buffer=errorBuf, block=true, size=size*size*ffi.sizeof(real), ptr=errMem}
+--[[ rel err
 	local frobErr = 0
 	for j=0,size*size-1 do
 		frobErr = frobErr + errMem[j]
@@ -357,7 +402,9 @@ for iter=1,200 do
 -- looks like after one iteration
 -- the CPU goes 10000 -> 1846.015020895
 -- the GPU goes 10000 -> 23890.132632578
--- so the iteration algorithm is off	
+-- so the iteration algorithm is off
+-- probably due to my Gauss-Seidel operating with arbitrary ordering ...
+	
 	local relErr = 0
 	local n = 0
 	for j=0,size*size-1 do
@@ -369,9 +416,20 @@ for iter=1,200 do
 	end
 	relErr = relErr / n
 
-	print(iter,'rel', relErr, 'of n',n,'frob', frobErr)
+--print(iter,'rel', relErr, 'of n',n,'frob', frobErr)
+print(iter, relErr, n, frobErr)
 	if frobErr < accuracy or not math.isfinite(frobErr) then break end
 --do break end
+--]]
+-- [[ frob err normalized by size (TODO this on the GPU if possible)
+	local err = 0
+	for j=0,size*size-1 do
+		err = err + errMem[j]
+	end
+	err = math.sqrt(err / (size * size))
+print(iter, err)
+	if err < accuracy or not math.isfinite(err) then break end
+--]]
 end
 
 gcmem.free(errMem)

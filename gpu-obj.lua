@@ -145,6 +145,7 @@ program:compile()
 
 --local printInfo = table()
 
+print('#iter','relErr', 'n', 'frobErr')
 function amrsolve(f,h)
 	local psi = env:buffer{name='psi'}
 	local psiOld = env:buffer()
@@ -244,10 +245,12 @@ function amrsolve(f,h)
 		clcall2D(size, size, calcRelErr, errorBuf.obj, psi.obj, psiOld.obj)
 		relErr = sumReduce()
 		count()
-		relErr = relErr / sumReduce(countBuf.obj)
+		local n = sumReduce(countBuf.obj)
+		relErr = relErr / n
 
 --printInfo:insert{iter,'rel', relErr, 'frob', frobErr}
-print(iter,'rel', relErr, 'frob', frobErr)
+--print(iter,'rel', relErr, 'frob', frobErr)
+print(iter, relErr, n, frobErr)
 		if frobErr < accuracy or not math.isfinite(frobErr) then break end
 	end
 end
@@ -268,9 +271,10 @@ env:kernel{
 ]],
 }()
 
+-- TODO use events
 local startTime = os.clock()
 amrsolve(f, h)
 local endTime = os.clock()
-print('time taken: '..(endTime - startTime))
+io.stderr:write('time taken: '..(endTime - startTime)..'\n')
 --printInfo:map(function(l) print(table.unpack(l)) end)
 
