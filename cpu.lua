@@ -13,7 +13,7 @@ a_ij = 1/h^2 -4/h^2 1/h^2
 --]]
 
 -- output all data in a way that I can compare it with the gpu versions
-local debugging = true
+--local debugging = true
 
 local matrix = require 'matrix'
 

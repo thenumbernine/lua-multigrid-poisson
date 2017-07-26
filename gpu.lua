@@ -4,7 +4,8 @@ local ffi = require 'ffi'
 require 'ext'
 local gcmem = require 'ext.gcmem'
 
-local debugging = true
+-- output all data in a way that I can compare it with the cpu versions
+--local debugging = true
 
 local function get64bit(list)
 	local best = list:map(function(item)
@@ -370,6 +371,11 @@ do
 	--print('|del.E|', frobNorm)	-- this matches cpu.lua
 end
 
+-- I am embarrassed to do this
+-- I know it's not accurate.
+-- I'll add cl event profiling soon
+local startTime = os.clock()
+
 local smooth = 7
 local h = 1/size
 local accuracy = 1e-10
@@ -431,5 +437,8 @@ print(iter, err)
 	if err < accuracy or not math.isfinite(err) then break end
 --]]
 end
+
+local endTime = os.clock()
+io.stderr:write('time taken: '..(endTime - startTime)..'\n')
 
 gcmem.free(errMem)
