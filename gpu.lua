@@ -5,7 +5,7 @@ require 'ext'
 local gcmem = require 'ext.gcmem'
 
 -- output all data in a way that I can compare it with the cpu versions
---local debugging = true
+local debugging = true
 
 local function get64bit(list)
 	local best = list:map(function(item)
@@ -26,7 +26,7 @@ local real = fp64 and 'double' or 'float'
 --print('using real',real)
 
 -- log2 size = 5 diverges for gpu ...
-local log2size = ... and tonumber(...) or 4
+local log2size = ... and tonumber(...) or 5
 local size = bit.lshift(1, log2size)
 local code = require 'template'([[
 #define size <?=size?>
@@ -307,6 +307,7 @@ local function inPlaceIterativeSolver(L, u, f, h)
 end
 
 local function twoGrid(h, u, f, L, smooth)
+print('L', L)	
 	if L == 1 then
 		--*u = *f / (-4 / h^2)
 showAndCheck('f', f, L, L)
@@ -381,7 +382,7 @@ local h = 1/size
 local accuracy = 1e-10
 --print('#iter','relErr','n','frobErr')
 print('#iter','err')
-for iter=1,math.huge do
+for iter=1,2 do--math.huge do
 	cmds:enqueueCopyBuffer{src=psi, dst=psiOld, size=size*size*ffi.sizeof(real)}
 	twoGrid(h, psi, f, size, smooth)
 

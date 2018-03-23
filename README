@@ -1,4 +1,5 @@
 multigrid Poisson solver
-test.lua is the cpu version, which operates on Gauss-Seidel (much more improved than it does on Jacobi)
+cpu.lua is the cpu version, which operates on Gauss-Seidel (much more improved than it does on Jacobi)
+cpu-raw.lua is the same as cpu except it operates in C allocated memory ... because this is what will be needed for a cpu/gpu multigrid solver.
 gpu.lua is the gpu version, based on my "require 'cl'", which can't use Gauss-Seidel (since you can't tell when the neighbors will be updated) but whose Gauss-Seidel-ish implementation still beats Jacobi.
 gpu-obj.lua is the gpu version based on my "erquire cl.obj'", which is aimed at being more concise than gpu.lua

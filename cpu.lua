@@ -13,7 +13,7 @@ a_ij = 1/h^2 -4/h^2 1/h^2
 --]]
 
 -- output all data in a way that I can compare it with the gpu versions
---local debugging = true
+local debugging = true
 
 local matrix = require 'matrix'
 
@@ -72,6 +72,7 @@ end
 
 local function twoGrid(h, u, f, smooth)
 	local L = #u
+print('L', L)	
 	
 	if L == 1 then
 		-- Gauss-Seidel single-cell update 
@@ -100,7 +101,9 @@ if debugging and L==size[1] then
 	show('f', f, L)
 end
 		inPlaceIterativeSolver(h, u, f)
-if L==size[1] then show('u', u, L) end
+--if L==size[1] then 
+	show('u', u, L) 
+--end
 	end
 
 	-- r = f - del^2 u
@@ -146,7 +149,7 @@ show('V', V, L2)
 			v[i][j], v[i+1][j], v[i][j+1], v[i+1][j+1] = value, value, value, value
 		end
 	end
-show('V', V, L2)
+show('v', v, L)
 
 	-- correct u
 	for i=1,L do
@@ -192,7 +195,7 @@ local function amrsolve(f, h)
 	local smooth = 7	-- 7 is optimal time for me
 	local accuracy = 1e-10
 	local psi = -f		-- initialize psi
-	for iter=1,math.huge do
+	for iter=1,2 do--math.huge do
 		local psiOld = matrix(psi)
 		twoGrid(h, psi, f, smooth)
 		
@@ -248,7 +251,7 @@ local function del(psi)
 	end)
 end
 
-local log2L = ... and tonumber(...) or 4
+local log2L = ... and tonumber(...) or 5
 local L = bit.lshift(1,log2L)
 local h = 1 / L
 size = matrix{L,L}
