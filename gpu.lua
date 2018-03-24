@@ -1,5 +1,3 @@
-#! /usr/bin/env luajit
-
 local ffi = require 'ffi'
 local class = require 'ext.class'
 local math = require 'ext.math'
@@ -419,11 +417,4 @@ function MultigridGPU:run()
 
 end
 
-
--- I am embarrassed to do this
--- I know it's not accurate.
--- I'll add cl event profiling soon
-local startTime = os.clock()
-multigrid:run()
-local endTime = os.clock()
-io.stderr:write('time taken: '..(endTime - startTime)..'\n')
+return MultigridGPU
