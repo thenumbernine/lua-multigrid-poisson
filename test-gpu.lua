@@ -1,10 +1,10 @@
 #! /usr/bin/env luajit
 
-local MultigridCPURaw = require 'multigrid-poisson.cpu-raw'
+local MultigridGPU = require 'multigrid-poisson.gpu'
 
 local log2size = ... and tonumber(...) or 5
 local size = bit.lshift(1, log2size)
-local multigrid = MultigridCPURaw(size)
+local multigrid = MultigridGPU(size)
 
 local startTime = os.clock()
 multigrid:run()

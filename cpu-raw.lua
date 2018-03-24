@@ -256,3 +256,5 @@ print(iter, err)
 		if err < accuracy or not math.isfinite(err) then break end
 	end
 end
+
+return MultigridCPURaw

@@ -18,6 +18,8 @@ end
 
 local MultigridGPU = class()
 
+MultigridGPU.smooth = 7
+
 function MultigridGPU:init(size)
 	self.platform = get64bit(require 'cl.platform'.getAll())
 	self.device, self.fp64 = get64bit(self.platform:getDevices{gpu=true})
@@ -340,17 +342,9 @@ self:showAndCheck('u', u, L, L)
 	end
 end
 
-
-
-
--- log2 size = 5 diverges for gpu ...
-local log2size = ... and tonumber(...) or 5
-local size = bit.lshift(1, log2size)
-local multigrid = MultigridGPU(size)
-
-MultigridGPU.smooth = 7
-
 function MultigridGPU:run()
+	local size = self.size
+
 	-- doing the error calculation in cpu ...
 	local errMem = ffi.new(self.real..'[?]', size*size)
 
