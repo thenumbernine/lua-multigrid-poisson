@@ -4,7 +4,9 @@ require 'ext'
 -- (2^6)^2 takes about 5 seconds to run, so don't do too many samples
 for _,test in ipairs{
 	'cpu.lua', 
-	'gpu-obj.lua',
+	'cpu-raw.lua', 
+	'gpu.lua',
+	--'gpu-obj.lua',
 } do
 	print('testing '..test..'...')
 	for i=0,5 do

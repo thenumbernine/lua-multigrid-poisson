@@ -1,15 +1,16 @@
 #! /usr/bin/env luajit
 
 local ffi = require 'ffi'
-require 'ext'
-local gcmem = require 'ext.gcmem'
+local class = require 'ext.class'
+local math = require 'ext.math'
+local string = require 'ext.string'
 
 -- output all data in a way that I can compare it with the cpu versions
 local debugging = true
 
 local function get64bit(list)
 	local best = list:map(function(item)
-		local exts = item:getExtensions():lower():trim()
+		local exts = string.trim(item:getExtensions():lower())
 		return {item=item, fp64=exts:match'cl_%w+_fp64'}
 	end):sort(function(a,b)
 		return (a.fp64 and 1 or 0) > (b.fp64 and 1 or 0)
@@ -17,18 +18,20 @@ local function get64bit(list)
 	return best.item, best.fp64
 end
 
-local platform = get64bit(require 'cl.platform'.getAll())
-local device, fp64 = get64bit(platform:getDevices{gpu=true})
-local ctx = require 'cl.context'{platform=platform, device=device}
-local cmds = require 'cl.commandqueue'{context=ctx, device=device}
+local MultigridGPU = class()
 
-local real = fp64 and 'double' or 'float'
---print('using real',real)
+function MultigridGPU:init(size)
+	self.platform = get64bit(require 'cl.platform'.getAll())
+	self.device, self.fp64 = get64bit(self.platform:getDevices{gpu=true})
+	self.ctx = require 'cl.context'{platform=self.platform, device=self.device}
+	self.cmds = require 'cl.commandqueue'{context=self.ctx, device=self.device}
 
--- log2 size = 5 diverges for gpu ...
-local log2size = ... and tonumber(...) or 5
-local size = bit.lshift(1, log2size)
-local code = require 'template'([[
+	self.real = self.fp64 and 'double' or 'float'
+	--print('using real',self.real)
+
+	self.size = size
+
+	local code = require 'template'([[
 #define size <?=size?>
 typedef <?=real?> real;
 
@@ -193,93 +196,76 @@ kernel void calcFrobErr(
 	errorBuf[index] = d * d;
 }
 
-kernel void square(
-	global real* frobBuf,
-	const global real* psi
-) {
-	int i = get_global_id(0);
-	int j = get_global_id(1);
-	if (i >= size || j >= size) return;
-	int index = i + size * j;
-	real d = psi[index];
-	frobBuf[index] = d * d;
-}
+]], self)
 
-]], {
-	real = real,
-	size = size,
-})
+	if self.fp64 then
+		code = '#pragma OPENCL EXTENSION cl_khr_fp64 : enable\n' .. code 
+	end
 
-if fp64 then
-	code = '#pragma OPENCL EXTENSION cl_khr_fp64 : enable\n' .. code 
+	self.program = require 'cl.program'{context=self.ctx, devices={self.device}, code=code}
+
+	local maxWorkGroupSize = tonumber(self.device:getInfo'CL_DEVICE_MAX_WORK_GROUP_SIZE')
+	self.maxWorkGroupSize = maxWorkGroupSize 
+
+	ffi.cdef('typedef '..self.real..' real;')
+
+	self.f = self.ctx:buffer{rw=true, size=size*size*ffi.sizeof(self.real)}
+	self.psi = self.ctx:buffer{rw=true, size=size*size*ffi.sizeof(self.real)}
+	self.psiOld = self.ctx:buffer{rw=true, size=size*size*ffi.sizeof(self.real)}
+	self.errorBuf = self.ctx:buffer{rw=true, size=size*size*ffi.sizeof(self.real)}
+	-- same size as psi, used for jacobi iteration
+	self.tmpU = self.ctx:buffer{rw=true, size=size*size*ffi.sizeof(self.real)}
+
+	self.rs = {}
+	self.Rs = {}
+	self.vs = {}
+	self.Vs = {}
+	for i=0,math.log(size,2) do
+		local L = bit.lshift(1,i)
+		for _,v in ipairs{'rs', 'Rs', 'vs', 'Vs'} do
+			self[v][L] = self.ctx:buffer{rw=true, size=L*L*ffi.sizeof(self.real)}
+			self.cmds:enqueueFillBuffer{buffer=self[v][L], size=L*L*ffi.sizeof(self.real)}
+		end
+	end
+
+	self.initKernel = self.program:kernel'init'
+	self.GaussSeidelKernel = self.program:kernel'GaussSeidel'
+	self.JacobiKernel = self.program:kernel'Jacobi'
+	self.calcResidualKernel = self.program:kernel'calcResidual'
+	self.reduceResidualKernel = self.program:kernel'reduceResidual'
+	self.expandResidualKernel = self.program:kernel'expandResidual'
+	self.addToKernel = self.program:kernel'addTo'
+	self.calcFrobErrKernel = self.program:kernel'calcFrobErr'
+	self.calcRelErr = self.program:kernel'calcRelErr'
+
+	self:clcall2D(size,size, self.initKernel, self.f, self.psi)
 end
 
-local program = require 'cl.program'{context=ctx, devices={device}, code=code}
 
-local maxWorkGroupSize = tonumber(device:getInfo'CL_DEVICE_MAX_WORK_GROUP_SIZE')
-
-ffi.cdef('typedef '..real..' real;')
-
-local f = ctx:buffer{rw=true, size=size*size*ffi.sizeof(real)}
-local psi = ctx:buffer{rw=true, size=size*size*ffi.sizeof(real)}
-local psiOld = ctx:buffer{rw=true, size=size*size*ffi.sizeof(real)}
-local errorBuf = ctx:buffer{rw=true, size=size*size*ffi.sizeof(real)}
--- same size as psi, used for jacobi iteration
-local tmpU = ctx:buffer{rw=true, size=size*size*ffi.sizeof(real)}
-
-local rs = {}
-local Rs = {}
-local vs = {}
-local Vs = {}
-for i=0,math.log(size,2) do
-	local L = 2^i
-	rs[L] = ctx:buffer{rw=true, size=L*L*ffi.sizeof(real)}
-	Rs[L] = ctx:buffer{rw=true, size=L*L*ffi.sizeof(real)}
-	vs[L] = ctx:buffer{rw=true, size=L*L*ffi.sizeof(real)}
-	Vs[L] = ctx:buffer{rw=true, size=L*L*ffi.sizeof(real)}
-	cmds:enqueueFillBuffer{buffer=rs[L], size=L*L*ffi.sizeof(real)}
-	cmds:enqueueFillBuffer{buffer=Rs[L], size=L*L*ffi.sizeof(real)}
-	cmds:enqueueFillBuffer{buffer=vs[L], size=L*L*ffi.sizeof(real)}
-	cmds:enqueueFillBuffer{buffer=Vs[L], size=L*L*ffi.sizeof(real)}
-end
-
-local init = program:kernel'init'
-local GaussSeidel = program:kernel'GaussSeidel'
-local Jacobi = program:kernel'Jacobi'
-local calcResidual = program:kernel'calcResidual'
-local reduceResidual = program:kernel'reduceResidual'
-local expandResidual = program:kernel'expandResidual'
-local addTo = program:kernel'addTo'
-local calcFrobErr = program:kernel'calcFrobErr'
-local calcRelErr = program:kernel'calcRelErr'
-local square = program:kernel'square'
-
-local function clcall1D(w, kernel, ...)
+function MultigridGPU:clcall1D(w, kernel, ...)
 	kernel:setArgs(...)
-	local l = math.min(w, maxWorkGroupSize)
-	cmds:enqueueNDRangeKernel{kernel=kernel, globalSize=w, localSize=l}
+	local l = math.min(w, self.maxWorkGroupSize)
+	self.cmds:enqueueNDRangeKernel{kernel=kernel, globalSize=w, localSize=l}
 end
 
-local function clcall2D(w,h, kernel, ...)
+function MultigridGPU:clcall2D(w,h, kernel, ...)
 	kernel:setArgs(...)
-	local mw = math.ceil(math.sqrt(maxWorkGroupSize))
-	local mh = maxWorkGroupSize / mw
+	local mw = math.ceil(math.sqrt(self.maxWorkGroupSize))
+	local mh = self.maxWorkGroupSize / mw
 	local l1 = math.min(w, mw)
 	local l2 = math.min(h, mh)
-	cmds:enqueueNDRangeKernel{kernel=kernel, globalSize={w,h}, localSize={l1,l2}}
+	self.cmds:enqueueNDRangeKernel{kernel=kernel, globalSize={w,h}, localSize={l1,l2}}
 end
 
-clcall2D(size,size, init, f, psi)
-
-local function getbuffer(gpuMem, L)
-	local cpuMem = gcmem.new('real', L*L)
-	cmds:enqueueReadBuffer{buffer=gpuMem, block=true, size=L*L*ffi.sizeof(real), ptr=cpuMem}
+function MultigridGPU:getbuffer(gpuMem, L)
+	local cpuMem = ffi.new(self.real..'[?]', L*L)
+	self.cmds:enqueueReadBuffer{buffer=gpuMem, block=true, size=L*L*ffi.sizeof(self.real), ptr=cpuMem}
 	return cpuMem
 end
 
-local function showAndCheck(name, gpuMem, L)
+function MultigridGPU:showAndCheck(name, gpuMem, L)
 	if not debugging then return end	
-	local cpuMem = getbuffer(gpuMem, L)
+	local cpuMem = self:getbuffer(gpuMem, L)
 	print(name)
 	for i=0,L-1 do
 		for j=0,L-1 do
@@ -292,27 +278,25 @@ local function showAndCheck(name, gpuMem, L)
 			error("found a nan")
 		end
 	end
-	gcmem.free(cpuMem)
 end
 		
-local function inPlaceIterativeSolver(L, u, f, h)
+function MultigridGPU:inPlaceIterativeSolver(L, u, f, h)
 	--[[ Gauss-Seidel
-	clcall2D(L,L,GaussSeidel, u, f, ffi.new('real[1]', h))
+	self:clcall2D(L,L,GaussSeidel, u, f, ffi.new(self.real..'[1]', h))
 	--]]
 	-- [[ Jacobi
-	clcall2D(L,L,Jacobi, tmpU, u, f, ffi.new('real[1]', h))
-	cmds:enqueueCopyBuffer{src=tmpU, dst=u, size=L*L*ffi.sizeof(real)}
+	self:clcall2D(L,L,self.JacobiKernel, self.tmpU, u, f, ffi.new(self.real..'[1]', h))
+	self.cmds:enqueueCopyBuffer{src=self.tmpU, dst=u, size=L*L*ffi.sizeof(self.real)}
 	--]]
-
 end
 
-local function twoGrid(h, u, f, L, smooth)
+function MultigridGPU:twoGrid(h, u, f, L, smooth)
 print('L', L)	
 	if L == 1 then
 		--*u = *f / (-4 / h^2)
-showAndCheck('f', f, L, L)
-		inPlaceIterativeSolver(L, u, f, h)
-showAndCheck('u', u, L, L)
+self:showAndCheck('f', f, L, L)
+		self:inPlaceIterativeSolver(L, u, f, h)
+self:showAndCheck('u', u, L, L)
 		return
 	end
 	
@@ -320,126 +304,126 @@ showAndCheck('u', u, L, L)
 if debugging and L==size then
 	print('smooth',i) 
 	print('h', h)
-	showAndCheck('f', f, L, L) 
+	self:showAndCheck('f', f, L, L) 
 end
-		inPlaceIterativeSolver(L, u, f, h)
-showAndCheck('u', u, L, L)
+		self:inPlaceIterativeSolver(L, u, f, h)
+self:showAndCheck('u', u, L, L)
 	end
 	
-	local r = rs[L]
-showAndCheck('f', f, L, L)
-showAndCheck('u', u, L, L)
-	--cmds:enqueueFillBuffer{buffer=r, size=L*L*ffi.sizeof(real)}
-	clcall2D(L,L, calcResidual, r, f, u, ffi.new('real[1]', h))
-showAndCheck('r', r, L, L)
+	local r = self.rs[L]
+self:showAndCheck('f', f, L, L)
+self:showAndCheck('u', u, L, L)
+	--self.cmds:enqueueFillBuffer{buffer=r, size=L*L*ffi.sizeof(self.real)}
+	self:clcall2D(L,L, self.calcResidualKernel, r, f, u, ffi.new(self.real..'[1]', h))
+self:showAndCheck('r', r, L, L)
 	
 	--r = f - a(u)
 
 	local L2 = L/2
-	local R = Rs[L2]
-	clcall2D(L2,L2, reduceResidual, R, r)
-showAndCheck('R', R, L2, L2)
+	local R = self.Rs[L2]
+	self:clcall2D(L2,L2, self.reduceResidualKernel, R, r)
+self:showAndCheck('R', R, L2, L2)
 	
-	local V = Vs[L2]
-	twoGrid(2*h, V, R, L2, smooth)
-showAndCheck('V', V, L2, L2)
+	local V = self.Vs[L2]
+	self:twoGrid(2*h, V, R, L2, smooth)
+self:showAndCheck('V', V, L2, L2)
 
-	local v = vs[L]
-	clcall2D(L2, L2, expandResidual, v, V)
-	--clcall2D(L, L, expandResidual, v, V)
-showAndCheck('v', v, L, L)
+	local v = self.vs[L]
+	self:clcall2D(L2, L2, self.expandResidualKernel, v, V)
+	--self:clcall2D(L, L, self.expandResidualKernel, v, V)
+self:showAndCheck('v', v, L, L)
 
-	clcall1D(L*L, addTo, ffi.new('size_t[1]', L*L), u, v)
-showAndCheck('u', u, L, L)
+	self:clcall1D(L*L, self.addToKernel, ffi.new('size_t[1]', L*L), u, v)
+self:showAndCheck('u', u, L, L)
 
 	for i=1,smooth do
-		inPlaceIterativeSolver(L, u, f, h)
-showAndCheck('u', u, L, L)
+		self:inPlaceIterativeSolver(L, u, f, h)
+self:showAndCheck('u', u, L, L)
 	end
 end
-	
--- doing the error calculation in cpu ...
-local errMem = gcmem.new('real', size*size)
 
-do
-	clcall2D(size, size, square, errorBuf, f)
-	cmds:enqueueReadBuffer{buffer=errorBuf, block=true, size=size*size*ffi.sizeof(real), ptr=errMem}
-	local frobNorm = 0
-	for j=0,size*size-1 do
-		frobNorm = frobNorm + errMem[j]
+
+
+
+-- log2 size = 5 diverges for gpu ...
+local log2size = ... and tonumber(...) or 5
+local size = bit.lshift(1, log2size)
+local multigrid = MultigridGPU(size)
+
+MultigridGPU.smooth = 7
+
+function MultigridGPU:run()
+	-- doing the error calculation in cpu ...
+	local errMem = ffi.new(self.real..'[?]', size*size)
+
+	local h = 1/size
+	local accuracy = 1e-10
+	--print('#iter','relErr','n','frobErr')
+	print('#iter','err')
+	for iter=1,2 do--math.huge do
+		self.cmds:enqueueCopyBuffer{src=self.psi, dst=self.psiOld, size=size*size*ffi.sizeof(self.real)}
+		self:twoGrid(h, self.psi, self.f, size, self.smooth)
+
+		self:clcall2D(size, size, self.calcFrobErrKernel, self.errorBuf, self.psi, self.psiOld)
+		self.cmds:enqueueReadBuffer{buffer=self.errorBuf, block=true, size=size*size*ffi.sizeof(self.real), ptr=errMem}
+	--[[ rel err
+		local frobErr = 0
+		for j=0,size*size-1 do
+			frobErr = frobErr + errMem[j]
+		end
+		frobErr = math.sqrt(frobErr)
+		
+		self:clcall2D(size, size, self.calcRelErrKernel, errorBuf, psi, psiOld)
+		self.cmds:enqueueReadBuffer{
+			buffer = errorBuf,
+			block = true,
+			size = size * size * ffi.sizeof(self.real),
+			ptr = errMem,
+		}
+	--local psiMem = ffi.new(self.real..'[?]', size*size)
+	--self.cmds:enqueueReadBuffer{buffer = psi, ptr = psiMem, block = true, size = size * size * ffi.sizeof(self.real)}
+	--local psiOldMem = ffi.new(self.real..'[?]', size*size)
+	--self.cmds:enqueueReadBuffer{buffer = psiOld, ptr = psiOldMem, block = true, size = size * size * ffi.sizeof(self.real)}
+	-- looks like after one iteration
+	-- the CPU goes 10000 -> 1846.015020895
+	-- the GPU goes 10000 -> 23890.132632578
+	-- so the iteration algorithm is off
+	-- probably due to my Gauss-Seidel operating with arbitrary ordering ...
+		
+		local relErr = 0
+		local n = 0
+		for j=0,size*size-1 do
+			if errMem[j] ~= 0 then
+				relErr = relErr + errMem[j]
+	--print('adding error from i,j',j%size,math.floor(j/size),'psi',psiMem[j],'psiOld',psiOldMem[j],'relErr',math.abs(1 - psiMem[j] / psiOldMem[j]))
+				n = n + 1
+			end
+		end
+		relErr = relErr / n
+
+	--print(iter,'rel', relErr, 'of n',n,'frob', frobErr)
+	print(iter, relErr, n, frobErr)
+		if frobErr < accuracy or not math.isfinite(frobErr) then break end
+	--do break end
+	--]]
+	-- [[ frob err normalized by size (TODO this on the GPU if possible)
+		local err = 0
+		for j=0,size*size-1 do
+			err = err + errMem[j]
+		end
+		err = math.sqrt(err / (size * size))
+	print(iter, err)
+		if err < accuracy or not math.isfinite(err) then break end
+	--]]
 	end
-	frobNorm = math.sqrt(frobNorm)
-	--print('|del.E|', frobNorm)	-- this matches cpu.lua
+
 end
+
 
 -- I am embarrassed to do this
 -- I know it's not accurate.
 -- I'll add cl event profiling soon
 local startTime = os.clock()
-
-local smooth = 7
-local h = 1/size
-local accuracy = 1e-10
---print('#iter','relErr','n','frobErr')
-print('#iter','err')
-for iter=1,2 do--math.huge do
-	cmds:enqueueCopyBuffer{src=psi, dst=psiOld, size=size*size*ffi.sizeof(real)}
-	twoGrid(h, psi, f, size, smooth)
-
-	clcall2D(size, size, calcFrobErr, errorBuf, psi, psiOld)
-	cmds:enqueueReadBuffer{buffer=errorBuf, block=true, size=size*size*ffi.sizeof(real), ptr=errMem}
---[[ rel err
-	local frobErr = 0
-	for j=0,size*size-1 do
-		frobErr = frobErr + errMem[j]
-	end
-	frobErr = math.sqrt(frobErr)
-	
-	clcall2D(size, size, calcRelErr, errorBuf, psi, psiOld)
-	cmds:enqueueReadBuffer{
-		buffer = errorBuf,
-		block = true,
-		size = size * size * ffi.sizeof(real),
-		ptr = errMem,
-	}
---local psiMem = ffi.new('real[?]', size*size)
---cmds:enqueueReadBuffer{buffer = psi, ptr = psiMem, block = true, size = size * size * ffi.sizeof(real)}
---local psiOldMem = ffi.new('real[?]', size*size)
---cmds:enqueueReadBuffer{buffer = psiOld, ptr = psiOldMem, block = true, size = size * size * ffi.sizeof(real)}
--- looks like after one iteration
--- the CPU goes 10000 -> 1846.015020895
--- the GPU goes 10000 -> 23890.132632578
--- so the iteration algorithm is off
--- probably due to my Gauss-Seidel operating with arbitrary ordering ...
-	
-	local relErr = 0
-	local n = 0
-	for j=0,size*size-1 do
-		if errMem[j] ~= 0 then
-			relErr = relErr + errMem[j]
---print('adding error from i,j',j%size,math.floor(j/size),'psi',psiMem[j],'psiOld',psiOldMem[j],'relErr',math.abs(1 - psiMem[j] / psiOldMem[j]))
-			n = n + 1
-		end
-	end
-	relErr = relErr / n
-
---print(iter,'rel', relErr, 'of n',n,'frob', frobErr)
-print(iter, relErr, n, frobErr)
-	if frobErr < accuracy or not math.isfinite(frobErr) then break end
---do break end
---]]
--- [[ frob err normalized by size (TODO this on the GPU if possible)
-	local err = 0
-	for j=0,size*size-1 do
-		err = err + errMem[j]
-	end
-	err = math.sqrt(err / (size * size))
-print(iter, err)
-	if err < accuracy or not math.isfinite(err) then break end
---]]
-end
-
+multigrid:run()
 local endTime = os.clock()
 io.stderr:write('time taken: '..(endTime - startTime)..'\n')
-
-gcmem.free(errMem)

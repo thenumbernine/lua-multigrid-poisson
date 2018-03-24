@@ -1,13 +1,11 @@
-#! /usr/bin/env luajit
-
 local ffi = require 'ffi'
+local bit = require 'bit' or bit32
 local image = require 'image'
-require 'ext'
+local class = require 'ext.class'
+local math = require 'ext.math'
 
 -- output all data in a way that I can compare it with the cpu versions
 local debugging = true
-
-local MultigridCPURaw = class()
 
 local function initCells(L, sy, i, j, f, psi)
 	local index = i + L * j
@@ -91,7 +89,7 @@ local function addTo(sx,i,n,u,v)
 end
 
 local function calcRelErr(sx,sy,i,j,errorBuf,psi,psiOld)
-	local index = i + size * j
+	local index = i + sx * j
 	if psiOld[index] ~= 0 and psiOld[index] ~= psi[index] then
 		errorBuf[index] = math.fabs(1. - psi[index] / psiOld[index])
 	else
@@ -100,15 +98,9 @@ local function calcRelErr(sx,sy,i,j,errorBuf,psi,psiOld)
 end
 
 local function calcFrobErr(sx,sy,i,j,errorBuf,psi,psiOld)
-	local index = i + size * j
+	local index = i + sx * j
 	local d = psi[index] - psiOld[index]
 	errorBuf[index] = d * d
-end
-
-local function square(sx,sy,i,j,frobBuf,psi)
-	local index = i + size * j
-	local d = psi[index]
-	frobBuf[index] = d * d
 end
 
 local function call1D(w, kernel, ...)
@@ -122,51 +114,6 @@ local function call2D(w,h, kernel, ...)
 		for i=0,w-1 do
 			kernel(w, h, i, j, ...)
 		end
-	end
-end
-
-function MultigridCPURaw:init(size, real)
-	self.real = real or 'double'
-	ffi.cdef('typedef '..self.real..' real;')
-	--print('using real',real)
-
-	self.size = size
-
-	self.f = image(size,size,1,self.real)
-	self.psi = image(size,size,1,self.real)
-	self.psiOld = image(size,size,1,self.real)
-	self.errorBuf = image(size,size,1,self.real)
-	-- same size as psi, used for jacobi iteration
-	self.tmpU = image(size,size,1,self.real)
-
-	self.rs = {}
-	self.Rs = {}
-	self.vs = {}
-	self.Vs = {}
-	for i=0,math.log(size,2) do
-		local L = 2^i
-		self.rs[L] = image(L, L, 1, self.real)
-		self.Rs[L] = image(L, L, 1, self.real)
-		self.vs[L] = image(L, L, 1, self.real)
-		self.Vs[L] = image(L, L, 1, self.real)
-		for _,buf in ipairs{'rs', 'Rs', 'vs', 'Vs'} do
-			buf = self[buf][L].buffer
-			for i=0,L*L-1 do
-				buf[i] = 0
-			end
-		end
-	end
-
-	call2D(size,size, initCells, self.f.buffer, self.psi.buffer)
-
-
-	-- temporary
-	for k,v in ipairs{
-		'size',
-		'f', 'psi', 'psiOld', 'errorBuf', 'tmpU',
-		'rs', 'Rs', 'vs', 'Vs'
-	} do
-		_G[v] = self[v]
 	end
 end
 
@@ -185,14 +132,52 @@ local function showAndCheck(name, im, L)
 		end
 	end
 end
-		
+
+
+
+local MultigridCPURaw = class()
+
+function MultigridCPURaw:init(size, real)
+	self.real = real or 'double'
+	--print('using real',real)
+
+	self.size = size
+
+	self.f = image(size,size,1,self.real)
+	self.psi = image(size,size,1,self.real)
+	self.psiOld = image(size,size,1,self.real)
+	self.errorBuf = image(size,size,1,self.real)
+	-- same size as psi, used for jacobi iteration
+	self.tmpU = image(size,size,1,self.real)
+
+	self.rs = {}
+	self.Rs = {}
+	self.vs = {}
+	self.Vs = {}
+	for i=0,math.log(size,2) do
+		local L = bit.lshift(1,i)
+		self.rs[L] = image(L, L, 1, self.real)
+		self.Rs[L] = image(L, L, 1, self.real)
+		self.vs[L] = image(L, L, 1, self.real)
+		self.Vs[L] = image(L, L, 1, self.real)
+		for _,buf in ipairs{'rs', 'Rs', 'vs', 'Vs'} do
+			buf = self[buf][L].buffer
+			for i=0,L*L-1 do
+				buf[i] = 0
+			end
+		end
+	end
+
+	call2D(size,size, initCells, self.f.buffer, self.psi.buffer)
+end
+
 function MultigridCPURaw:inPlaceIterativeSolver(L, u, f, h)
 	--[[ Gauss-Seidel
 	call2D(L,L,GaussSeidel, u, f, h)
 	--]]
 	-- [[ Jacobi
-	call2D(L,L,Jacobi, tmpU.buffer, u, f, h)
-	ffi.copy(u, tmpU.buffer, L*L*ffi.sizeof(self.real))
+	call2D(L,L,Jacobi, self.tmpU.buffer, u, f, h)
+	ffi.copy(u, self.tmpU.buffer, L*L*ffi.sizeof(self.real))
 	--]]
 end
 
@@ -209,7 +194,7 @@ showAndCheck('u', u, L, L)
 	end
 	
 	for i=1,smooth do
-if debugging and L==size then
+if debugging and L==self.size then
 	print('smooth',i) 
 	print('h', h)
 	showAndCheck('f', f, L, L) 
@@ -218,7 +203,7 @@ end
 showAndCheck('u', u, L, L)
 	end
 	
-	local r = rs[L].buffer
+	local r = self.rs[L].buffer
 showAndCheck('f', f, L, L)
 showAndCheck('u', u, L, L)
 	call2D(L,L, calcResidual, r, f, u, h)
@@ -227,15 +212,15 @@ showAndCheck('r', r, L, L)
 	--r = f - a(u)
 
 	local L2 = L/2
-	local R = Rs[L2].buffer
+	local R = self.Rs[L2].buffer
 	call2D(L2,L2, reduceResidual, R, r)
 showAndCheck('R', R, L2, L2)
 	
-	local V = Vs[L2].buffer
+	local V = self.Vs[L2].buffer
 	self:twoGrid(2*h, V, R, L2, smooth)
 showAndCheck('V', V, L2, L2)
 
-	local v = vs[L].buffer
+	local v = self.vs[L].buffer
 	call2D(L2, L2, expandResidual, v, V)
 	--call2D(L, L, expandResidual, v, V)
 showAndCheck('v', v, L, L)
@@ -258,25 +243,16 @@ function MultigridCPURaw:run()
 	--print('#iter','relErr','n','frobErr')
 	print('#iter','err')
 	for iter=1,2 do--math.huge do
-		ffi.copy(psiOld.buffer, psi.buffer, size*size*ffi.sizeof(self.real))
-		self:twoGrid(h, psi.buffer, f.buffer, size, smooth)
+		ffi.copy(self.psiOld.buffer, self.psi.buffer, size*size*ffi.sizeof(self.real))
+		self:twoGrid(h, self.psi.buffer, self.f.buffer, size, smooth)
 
-		call2D(size, size, calcFrobErr, errorBuf.buffer, psi.buffer, psiOld.buffer)
+		call2D(size, size, calcFrobErr, self.errorBuf.buffer, self.psi.buffer, self.psiOld.buffer)
 		local err = 0
 		for j=0,size*size-1 do
-			err = err + errorBuf.buffer[j]
+			err = err + self.errorBuf.buffer[j]
 		end
 		err = math.sqrt(err / (size * size))
 print(iter, err)
 		if err < accuracy or not math.isfinite(err) then break end
 	end
 end
-
-local log2size = ... and tonumber(...) or 5
-local size = bit.lshift(1, log2size)
-local multigrid = MultigridCPURaw(size)
-
-local startTime = os.clock()
-multigrid:run()
-local endTime = os.clock()
-io.stderr:write('time taken: '..(endTime - startTime)..'\n')
