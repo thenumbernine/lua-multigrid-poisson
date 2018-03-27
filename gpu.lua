@@ -290,7 +290,7 @@ function MultigridGPU:inPlaceIterativeSolver(L, u, f, h)
 	--]]
 end
 
-function MultigridGPU:twoGrid(h, u, f, L, smooth)
+function MultigridGPU:twoGrid(h, u, f, L)
 print('L', L)	
 	if L == 1 then
 		--*u = *f / (-4 / h^2)
@@ -300,7 +300,7 @@ self:showAndCheck('u', u, L, L)
 		return
 	end
 	
-	for i=1,smooth do
+	for i=1,self.smooth do
 if debugging and L==size then
 	print('smooth',i) 
 	print('h', h)
@@ -325,7 +325,7 @@ self:showAndCheck('r', r, L, L)
 self:showAndCheck('R', R, L2, L2)
 	
 	local V = self.Vs[L2]
-	self:twoGrid(2*h, V, R, L2, smooth)
+	self:twoGrid(2*h, V, R, L2)
 self:showAndCheck('V', V, L2, L2)
 
 	local v = self.vs[L]
@@ -336,7 +336,7 @@ self:showAndCheck('v', v, L, L)
 	self:clcall1D(L*L, self.addToKernel, ffi.new('size_t[1]', L*L), u, v)
 self:showAndCheck('u', u, L, L)
 
-	for i=1,smooth do
+	for i=1,self.smooth do
 		self:inPlaceIterativeSolver(L, u, f, h)
 self:showAndCheck('u', u, L, L)
 	end
@@ -351,64 +351,23 @@ function MultigridGPU:run()
 	local h = 1/size
 	local accuracy = 1e-10
 	--print('#iter','relErr','n','frobErr')
-	print('#iter','err')
+print('#iter','err')
 	for iter=1,2 do--math.huge do
 		self.cmds:enqueueCopyBuffer{src=self.psi, dst=self.psiOld, size=size*size*ffi.sizeof(self.real)}
-		self:twoGrid(h, self.psi, self.f, size, self.smooth)
+		self:twoGrid(h, self.psi, self.f, size)
 
 		self:clcall2D(size, size, self.calcFrobErrKernel, self.errorBuf, self.psi, self.psiOld)
 		self.cmds:enqueueReadBuffer{buffer=self.errorBuf, block=true, size=size*size*ffi.sizeof(self.real), ptr=errMem}
-	--[[ rel err
-		local frobErr = 0
-		for j=0,size*size-1 do
-			frobErr = frobErr + errMem[j]
-		end
-		frobErr = math.sqrt(frobErr)
 		
-		self:clcall2D(size, size, self.calcRelErrKernel, errorBuf, psi, psiOld)
-		self.cmds:enqueueReadBuffer{
-			buffer = errorBuf,
-			block = true,
-			size = size * size * ffi.sizeof(self.real),
-			ptr = errMem,
-		}
-	--local psiMem = ffi.new(self.real..'[?]', size*size)
-	--self.cmds:enqueueReadBuffer{buffer = psi, ptr = psiMem, block = true, size = size * size * ffi.sizeof(self.real)}
-	--local psiOldMem = ffi.new(self.real..'[?]', size*size)
-	--self.cmds:enqueueReadBuffer{buffer = psiOld, ptr = psiOldMem, block = true, size = size * size * ffi.sizeof(self.real)}
-	-- looks like after one iteration
-	-- the CPU goes 10000 -> 1846.015020895
-	-- the GPU goes 10000 -> 23890.132632578
-	-- so the iteration algorithm is off
-	-- probably due to my Gauss-Seidel operating with arbitrary ordering ...
-		
-		local relErr = 0
-		local n = 0
-		for j=0,size*size-1 do
-			if errMem[j] ~= 0 then
-				relErr = relErr + errMem[j]
-	--print('adding error from i,j',j%size,math.floor(j/size),'psi',psiMem[j],'psiOld',psiOldMem[j],'relErr',math.abs(1 - psiMem[j] / psiOldMem[j]))
-				n = n + 1
-			end
-		end
-		relErr = relErr / n
-
-	--print(iter,'rel', relErr, 'of n',n,'frob', frobErr)
-	print(iter, relErr, n, frobErr)
-		if frobErr < accuracy or not math.isfinite(frobErr) then break end
-	--do break end
-	--]]
-	-- [[ frob err normalized by size (TODO this on the GPU if possible)
+		-- frob err normalized by size (TODO this on the GPU if possible)
 		local err = 0
 		for j=0,size*size-1 do
 			err = err + errMem[j]
 		end
 		err = math.sqrt(err / (size * size))
-	print(iter, err)
+print(iter, err)
 		if err < accuracy or not math.isfinite(err) then break end
-	--]]
 	end
-
 end
 
 return MultigridGPU

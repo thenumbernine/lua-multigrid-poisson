@@ -137,6 +137,8 @@ end
 
 local MultigridCPURaw = class()
 
+MultigridCPURaw.smooth = 7
+
 function MultigridCPURaw:init(size, real)
 	self.real = real or 'double'
 	--print('using real',real)
@@ -181,7 +183,7 @@ function MultigridCPURaw:inPlaceIterativeSolver(L, u, f, h)
 	--]]
 end
 
-function MultigridCPURaw:twoGrid(h, u, f, L, smooth)
+function MultigridCPURaw:twoGrid(h, u, f, L)
 	local real = self.real
 
 print('L', L)	
@@ -193,7 +195,7 @@ showAndCheck('u', u, L, L)
 		return
 	end
 	
-	for i=1,smooth do
+	for i=1,self.smooth do
 if debugging and L==self.size then
 	print('smooth',i) 
 	print('h', h)
@@ -217,7 +219,7 @@ showAndCheck('r', r, L, L)
 showAndCheck('R', R, L2, L2)
 	
 	local V = self.Vs[L2].buffer
-	self:twoGrid(2*h, V, R, L2, smooth)
+	self:twoGrid(2*h, V, R, L2)
 showAndCheck('V', V, L2, L2)
 
 	local v = self.vs[L].buffer
@@ -228,7 +230,7 @@ showAndCheck('v', v, L, L)
 	call1D(L*L, addTo, L*L, u, v)
 showAndCheck('u', u, L, L)
 
-	for i=1,smooth do
+	for i=1,self.smooth do
 		self:inPlaceIterativeSolver(L, u, f, h, real)
 showAndCheck('u', u, L, L)
 	end
@@ -237,14 +239,13 @@ end
 function MultigridCPURaw:run()
 	local size = self.size
 
-	local smooth = 7
 	local h = 1/size
 	local accuracy = 1e-10
 	--print('#iter','relErr','n','frobErr')
 	print('#iter','err')
 	for iter=1,2 do--math.huge do
 		ffi.copy(self.psiOld.buffer, self.psi.buffer, size*size*ffi.sizeof(self.real))
-		self:twoGrid(h, self.psi.buffer, self.f.buffer, size, smooth)
+		self:twoGrid(h, self.psi.buffer, self.f.buffer, size)
 
 		call2D(size, size, calcFrobErr, self.errorBuf.buffer, self.psi.buffer, self.psiOld.buffer)
 		local err = 0

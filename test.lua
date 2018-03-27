@@ -7,6 +7,7 @@ for _,test in ipairs{
 	'test-cpu-raw.lua', 
 	'test-gpu.lua',
 	--'test-gpu-obj.lua',
+	'test-cpu-gpu.lua',
 } do
 	print('testing '..test..'...')
 	for i=0,5 do
