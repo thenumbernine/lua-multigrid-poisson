@@ -5,7 +5,7 @@
 local ffi = require 'ffi'
 local bit = require 'bit'
 require 'ext'
-local gcmem = require 'ext.gcmem'
+local math = require 'ext.math'
 
 local log2size = ... and tonumber(...) or 4
 local size = bit.lshift(1, log2size)
@@ -161,7 +161,7 @@ function amrsolve(f,h)
 	local vs = {}
 	local Vs = {}
 	local domains = {}
-	for i=0,math.log(size,2) do
+	for i=0,math.round(math.log(size,2)) do
 		local L = 2^i
 		local domain = env:domain{size = {L,L}}
 		domains[L] = domain

@@ -156,7 +156,7 @@ function MultigridCPURaw:init(size, real)
 	self.Rs = {}
 	self.vs = {}
 	self.Vs = {}
-	for i=0,math.log(size,2) do
+	for i=0,math.round(math.log(size,2)) do
 		local L = bit.lshift(1,i)
 		self.rs[L] = image(L, L, 1, self.real)
 		self.Rs[L] = image(L, L, 1, self.real)
@@ -204,7 +204,7 @@ end
 		self:inPlaceIterativeSolver(L, u, f, h, real)
 showAndCheck('u', u, L, L)
 	end
-	
+
 	local r = self.rs[L].buffer
 showAndCheck('f', f, L, L)
 showAndCheck('u', u, L, L)

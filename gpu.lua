@@ -220,7 +220,7 @@ kernel void calcFrobErr(
 	self.Rs = {}
 	self.vs = {}
 	self.Vs = {}
-	for i=0,math.log(size,2) do
+	for i=0,math.round(math.log(size,2)) do
 		local L = bit.lshift(1,i)
 		for _,v in ipairs{'rs', 'Rs', 'vs', 'Vs'} do
 			self[v][L] = self.ctx:buffer{rw=true, size=L*L*ffi.sizeof(self.real)}
