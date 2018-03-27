@@ -5,8 +5,8 @@ local MultigridCPUGPU = require 'multigrid-poisson.cpu-gpu'
 
 local log2size = ... and tonumber(...) or 5
 local size = bit.lshift(1, log2size)
-local level = tonumber(select(2, ...) or nil) or 3
-local multigrid = MultigridCPUGPU(size, nil, level)
+local cpudepth = tonumber(select(2, ...) or nil) or 3
+local multigrid = MultigridCPUGPU(size, nil, cpudepth)
 
 local startTime = os.clock()
 multigrid:run()

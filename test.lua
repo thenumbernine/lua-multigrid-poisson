@@ -2,10 +2,9 @@
 require 'ext'
 local ffi = require 'ffi'
 local lua = arg[table(arg):keys():sort():inf()]
+local gnuplot = require 'gnuplot'
 
--- only works up to (2^6)^2 before it gets too slow
--- (2^6)^2 takes about 5 seconds to run, so don't do too many samples
-local cols = {
+local cols = table{
 	'cpu',
 	'cpu-raw',
 	'gpu',
@@ -13,7 +12,8 @@ local cols = {
 	'cpu-gpu',
 }
 
-local f = io.open('out.txt', 'w')
+local fn = 'cpu-vs-gpu.txt'
+local f = io.open(fn, 'w')
 local function write(...)
 	for i=1,select('#', ...) do
 		local s = tostring(select(i, ...))
@@ -30,9 +30,9 @@ for _,col in ipairs(cols) do
 end
 write'\n'
 
-local tries = 10
+local tries = 1
 
-for size=0,10 do
+for size=0,5 do
 	local line = table()
 	write(2^size)
 	for _,col in ipairs(cols) do
@@ -58,3 +58,14 @@ for size=0,10 do
 	write'\n'
 end
 f:close()
+
+gnuplot(table(
+	{
+		output = 'cpu-vs-gpu.png',
+		data = data,
+		style = 'data linespoints',
+	},
+	cols:map(function(col,i)
+		return {fn, using='1:'..i+1, title=col}
+	end)
+))
