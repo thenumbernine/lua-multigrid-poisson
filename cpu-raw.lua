@@ -138,6 +138,7 @@ end
 local MultigridCPURaw = class()
 
 MultigridCPURaw.smooth = 7
+MultigridCPURaw.accuracy = 1e-10
 
 function MultigridCPURaw:init(size, real)
 	self.real = real or 'double'
@@ -240,7 +241,6 @@ function MultigridCPURaw:run()
 	local size = self.size
 
 	local h = 1/size
-	local accuracy = 1e-10
 	--print('#iter','relErr','n','frobErr')
 	print('#iter','err')
 	for iter=1,2 do--math.huge do
@@ -254,7 +254,7 @@ function MultigridCPURaw:run()
 		end
 		err = math.sqrt(err / (size * size))
 print(iter, err)
-		if err < accuracy or not math.isfinite(err) then break end
+		if err < self.accuracy or not math.isfinite(err) then break end
 	end
 end
 

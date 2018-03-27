@@ -19,6 +19,7 @@ end
 local MultigridGPU = class()
 
 MultigridGPU.smooth = 7
+MultigridGPU.accuracy = 1e-10
 
 function MultigridGPU:init(size)
 	self.platform = get64bit(require 'cl.platform'.getAll())
@@ -349,7 +350,6 @@ function MultigridGPU:run()
 	local errMem = ffi.new(self.real..'[?]', size*size)
 
 	local h = 1/size
-	local accuracy = 1e-10
 	--print('#iter','relErr','n','frobErr')
 print('#iter','err')
 	for iter=1,2 do--math.huge do
@@ -366,7 +366,7 @@ print('#iter','err')
 		end
 		err = math.sqrt(err / (size * size))
 print(iter, err)
-		if err < accuracy or not math.isfinite(err) then break end
+		if err < self.accuracy or not math.isfinite(err) then break end
 	end
 end
 
