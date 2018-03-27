@@ -158,7 +158,7 @@ kernel void expandResidual(
 }
 
 kernel void addTo(
-	size_t n,
+	unsigned int n,
 	global real* u,
 	const global real* v
 ) {
@@ -333,7 +333,7 @@ self:showAndCheck('V', V, L2, L2)
 	--self:clcall2D(L, L, self.expandResidualKernel, v, V)
 self:showAndCheck('v', v, L, L)
 
-	self:clcall1D(L*L, self.addToKernel, ffi.new('size_t[1]', L*L), u, v)
+	self:clcall1D(L*L, self.addToKernel, ffi.new('unsigned int[1]', L*L), u, v)
 self:showAndCheck('u', u, L, L)
 
 	for i=1,self.smooth do
