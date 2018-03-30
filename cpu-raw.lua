@@ -4,8 +4,6 @@ local image = require 'image'
 local class = require 'ext.class'
 local math = require 'ext.math'
 
--- output all data in a way that I can compare it with the cpu versions
-local debugging = true
 
 local function initCells(L, sy, i, j, f, psi)
 	local index = i + L * j
@@ -117,8 +115,18 @@ local function call2D(w,h, kernel, ...)
 	end
 end
 
-local function showAndCheck(name, im, L)
-	if not debugging then return end	
+
+
+local MultigridCPURaw = class()
+
+-- output all data in a way that I can compare it with the cpu versions
+MultigridCPURaw.debugging = false
+
+MultigridCPURaw.smooth = 7
+MultigridCPURaw.accuracy = 1e-10
+
+function MultigridCPURaw:show(name, im, L)
+	if not self.debugging then return end	
 	print(name)
 	for i=0,L-1 do
 		for j=0,L-1 do
@@ -132,13 +140,6 @@ local function showAndCheck(name, im, L)
 		end
 	end
 end
-
-
-
-local MultigridCPURaw = class()
-
-MultigridCPURaw.smooth = 7
-MultigridCPURaw.accuracy = 1e-10
 
 function MultigridCPURaw:init(size, real)
 	self.real = real or 'double'
@@ -190,50 +191,50 @@ function MultigridCPURaw:twoGrid(h, u, f, L)
 print('L', L)	
 	if L == 1 then
 		--*u = *f / (-4 / h^2)
-showAndCheck('f', f, L, L)
+self:show('f', f, L, L)
 		self:inPlaceIterativeSolver(L, u, f, h, real)
-showAndCheck('u', u, L, L)
+self:show('u', u, L, L)
 		return
 	end
 	
 	for i=1,self.smooth do
-if debugging and L==self.size then
+if self.debugging and L==self.size then
 	print('smooth',i) 
 	print('h', h)
-	showAndCheck('f', f, L, L) 
+	self:show('f', f, L, L) 
 end
 		self:inPlaceIterativeSolver(L, u, f, h, real)
-showAndCheck('u', u, L, L)
+self:show('u', u, L, L)
 	end
 
 	local r = self.rs[L].buffer
-showAndCheck('f', f, L, L)
-showAndCheck('u', u, L, L)
+self:show('f', f, L, L)
+self:show('u', u, L, L)
 	call2D(L,L, calcResidual, r, f, u, h)
-showAndCheck('r', r, L, L)
+self:show('r', r, L, L)
 	
 	--r = f - a(u)
 
 	local L2 = L/2
 	local R = self.Rs[L2].buffer
 	call2D(L2,L2, reduceResidual, R, r)
-showAndCheck('R', R, L2, L2)
+self:show('R', R, L2, L2)
 	
 	local V = self.Vs[L2].buffer
 	self:twoGrid(2*h, V, R, L2)
-showAndCheck('V', V, L2, L2)
+self:show('V', V, L2, L2)
 
 	local v = self.vs[L].buffer
 	call2D(L2, L2, expandResidual, v, V)
 	--call2D(L, L, expandResidual, v, V)
-showAndCheck('v', v, L, L)
+self:show('v', v, L, L)
 
 	call1D(L*L, addTo, L*L, u, v)
-showAndCheck('u', u, L, L)
+self:show('u', u, L, L)
 
 	for i=1,self.smooth do
 		self:inPlaceIterativeSolver(L, u, f, h, real)
-showAndCheck('u', u, L, L)
+self:show('u', u, L, L)
 	end
 end
 

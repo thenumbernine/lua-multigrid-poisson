@@ -1,5 +1,6 @@
 #!/usr/bin/env luajit
 require 'ext'
+local bit = require 'bit' or bit32
 local ffi = require 'ffi'
 local lua = arg[table(arg):keys():sort():inf()]
 local gnuplot = require 'gnuplot'
@@ -30,27 +31,24 @@ for _,col in ipairs(cols) do
 end
 write'\n'
 
-local tries = 1
+local log2size = ... and tonumber(...) or 5
+local size = bit.lshift(1, log2size)
+local cpudepth = tonumber(select(2, ...) or nil) or 3
 
-for size=0,5 do
+local tries = 1
+for log2size=0,5 do
+	local size = bit.lshift(1, log2size)
 	local line = table()
-	write(2^size)
+	write(size)
 	for _,col in ipairs(cols) do
 		local test = 'test-'..col..'.lua'
 		local bestTime = math.huge
 		for try=1,tries do
-			local devnull = ({
-				Windows = 'nul'
-			})[ffi.os] or '/dev/null'
-			local cmd = lua..' '..test..' '..size..' 2> tmp > '..devnull
-			local result = {os.execute(cmd)}
-			assert(result[1] or result[2] == 'unknown', "failed on cmd "..cmd)
-			local results = file.tmp
-			file.tmp = nil
-			local time = assert(tonumber(results:match'time taken: (.*)'), 
-				"failed to find time taken in output:\n"
-				..('='):rep(20)..'\n'
-				..results)
+			local cl = require('multigrid-poisson.'..col)
+			local startTime = os.clock()
+			local multigrid = cl(size, nil, cpudepth)	
+			local endTime = os.clock()
+			local time = endTime - startTime
 			bestTime = math.min(bestTime, time)
 		end
 		write('\t',bestTime)

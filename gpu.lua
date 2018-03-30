@@ -3,8 +3,6 @@ local class = require 'ext.class'
 local math = require 'ext.math'
 local string = require 'ext.string'
 
--- output all data in a way that I can compare it with the cpu versions
-local debugging = true
 
 local function get64bit(list)
 	local best = list:map(function(item)
@@ -16,7 +14,11 @@ local function get64bit(list)
 	return best.item, best.fp64
 end
 
+
 local MultigridGPU = class()
+
+-- output all data in a way that I can compare it with the cpu versions
+MultigridGPU.debugging = false
 
 MultigridGPU.smooth = 7
 MultigridGPU.accuracy = 1e-10
@@ -265,7 +267,7 @@ function MultigridGPU:getbuffer(gpuMem, L)
 end
 
 function MultigridGPU:showAndCheck(name, gpuMem, L)
-	if not debugging then return end	
+	if not self.debugging then return end	
 	local cpuMem = self:getbuffer(gpuMem, L)
 	print(name)
 	for i=0,L-1 do
@@ -302,7 +304,7 @@ self:showAndCheck('u', u, L, L)
 	end
 	
 	for i=1,self.smooth do
-if debugging and L==size then
+if self.debugging and L==size then
 	print('smooth',i) 
 	print('h', h)
 	self:showAndCheck('f', f, L, L) 

@@ -10,12 +10,12 @@ a_ij = 1/h^2 -4/h^2 1/h^2
 local class = require 'ext.class'
 local math = require 'ext.math'
 
--- output all data in a way that I can compare it with the gpu versions
-local debugging = true
-
 local matrix = require 'matrix'
 
 local MultigridCPU = class()
+
+-- output all data in a way that I can compare it with the gpu versions
+MultigridCPU.debugging = false
 	
 MultigridCPU.smooth = 7	-- 7 is optimal time for me
 MultigridCPU.accuracy = 1e-10
@@ -55,8 +55,8 @@ end
 --MultigridCPU.inPlaceIterativeSolver = GaussSeidel
 MultigridCPU.inPlaceIterativeSolver = Jacobi
 
-local function show(name, m, L)
-	if not debugging then return end
+function MultigridCPU:show(name, m, L)
+	if not self.debugging then return end
 	print(name)
 	for i=1,L do
 		for j=1,L do
@@ -86,27 +86,27 @@ print('L', L)
 		end
 		local askew_u = (u_xl + u_xr + u_yl + u_yr) / h^2
 		local adiag = -4 / h^2
-show('f', f, L)
+self:show('f', f, L)
 		u[1][1] = (f[1][1] - askew_u) / adiag 
-show('u', u, L)
+self:show('u', u, L)
 		return
 	end
 
 	for i=1,self.smooth do
-if debugging and L==size[1] then
+if self.debugging and L==size[1] then
 	print('smooth',i)
 	print('h', h)
-	show('f', f, L)
+	self:show('f', f, L)
 end
 		self:inPlaceIterativeSolver(h, u, f)
 --if L==size[1] then 
-	show('u', u, L) 
+	self:show('u', u, L) 
 --end
 	end
 
 	-- r = f - del^2 u
-show('f', f, L)
-show('u', u, L)
+self:show('f', f, L)
+self:show('u', u, L)
 	local r = matrix.zeros(L,L)
 	for i=1,L do
 		for j=1,L do
@@ -120,7 +120,7 @@ show('u', u, L)
 			r[i][j] = f[i][j] - a_u
 		end
 	end
-show('r', r, L)
+self:show('r', r, L)
 	
 	-- del^2 V = R
 	local L2 = L/2
@@ -132,11 +132,11 @@ show('r', r, L)
 			R[I][J] = (r[i][j] + r[i+1][j] + r[i][j+1] + r[i+1][j+1]) / 4
 		end
 	end
-show('R', R, L2)
+self:show('R', R, L2)
 
 	local V = matrix.zeros(L2, L2)
 	self:twoGrid(2*h, V, R)
-show('V', V, L2)
+self:show('V', V, L2)
 
 	local v = matrix.zeros(L, L)
 	for I=1,L2 do
@@ -147,7 +147,7 @@ show('V', V, L2)
 			v[i][j], v[i+1][j], v[i][j+1], v[i+1][j+1] = value, value, value, value
 		end
 	end
-show('v', v, L)
+self:show('v', v, L)
 
 	-- correct u
 	for i=1,L do
@@ -155,11 +155,11 @@ show('v', v, L)
 			u[i][j] = u[i][j] + v[i][j]
 		end
 	end
-show('u', u, L)
+self:show('u', u, L)
 
 	for i=1,self.smooth do
 		self:inPlaceIterativeSolver(h, u, f)
-show('u', u, L)
+self:show('u', u, L)
 	end
 end
 
