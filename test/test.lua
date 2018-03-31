@@ -7,10 +7,10 @@ local gnuplot = require 'gnuplot'
 
 local cols = table{
 	'cpu',
-	'cpu-raw',
-	'gpu',
+	--'cpu-raw',
+	--'gpu',
 	--'gpu-obj',
-	'cpu-gpu',
+	--'cpu-gpu',
 }
 
 local fn = 'cpu-vs-gpu.txt'
@@ -31,12 +31,18 @@ for _,col in ipairs(cols) do
 end
 write'\n'
 
-local log2size = ... and tonumber(...) or 5
-local size = bit.lshift(1, log2size)
+--[[
+todo args for:
+	size
+	cpudepth
+	real
+	debug output
+	which solvers to run
+--]]
 local cpudepth = tonumber(select(2, ...) or nil) or 3
 
 local tries = 1
-for log2size=0,5 do
+for log2size=5,5 do
 	local size = bit.lshift(1, log2size)
 	local line = table()
 	write(size)
@@ -45,8 +51,9 @@ for log2size=0,5 do
 		local bestTime = math.huge
 		for try=1,tries do
 			local cl = require('multigrid-poisson.'..col)
-			local startTime = os.clock()
 			local multigrid = cl(size, nil, cpudepth)	
+			local startTime = os.clock()
+			multigrid:run()
 			local endTime = os.clock()
 			local time = endTime - startTime
 			bestTime = math.min(bestTime, time)

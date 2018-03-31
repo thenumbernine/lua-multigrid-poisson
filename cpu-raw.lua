@@ -19,8 +19,6 @@ local function initCells(L, sy, i, j, f, psi)
 	psi[index] = -f[index]
 end
 
---doing this on a GPU doesn't guarantee order ...
---better use Jacobi ...
 local function GaussSeidel(L,sy,i,j,u,f,h)
 	local index = i + L * j
 	local u_xl = i > 0 and u[(i-1) + L * j] or 0
