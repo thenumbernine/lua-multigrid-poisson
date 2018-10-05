@@ -12,12 +12,6 @@ local size = bit.lshift(1, log2size)
 
 local env = require 'cl.obj.env'{size={size,size}}
 
-local function getn(...)
-	local t = {...}
-	t.n = select('#', ...)
-	return t
-end
-
 local code = require 'template'([[
 #define size <?=size?>
 
