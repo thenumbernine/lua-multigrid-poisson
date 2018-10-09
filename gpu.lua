@@ -6,8 +6,8 @@ local string = require 'ext.string'
 
 local function get64bit(list)
 	local best = list:map(function(item)
-		local exts = string.trim(item:getExtensions():lower())
-		return {item=item, fp64=exts:match'cl_%w+_fp64'}
+		local exts = item:getExtensions():map(string.lower)
+		return {item=item, fp64=exts:find(function(s) return s:match'cl_%w+_fp64' end)}
 	end):sort(function(a,b)
 		return (a.fp64 and 1 or 0) > (b.fp64 and 1 or 0)
 	end)[1]
