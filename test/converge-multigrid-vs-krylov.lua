@@ -5,12 +5,12 @@ local matrix = require 'matrix'
 local div = require 'matrix.div'
 local table = require 'ext.table'
 local math = require 'ext.math'
-local file = require 'ext.file'
+local path = require 'ext.path'
 local range = require 'ext.range'
 local MultigridCPU = require 'multigrid-poisson.cpu'
 
 local epsilon = 1e-20
-file'converge':mkdir()
+path'converge':mkdir()
 
 for _,size in ipairs{4,8,16,32,64,128} do
 	print('solving for size '..size)
@@ -84,7 +84,7 @@ for _,size in ipairs{4,8,16,32,64,128} do
 	end
 	--]]
 
-	file('converge/'..size..'.txt'):write(data:map(function(row)
+	path('converge/'..size..'.txt'):write(data:map(function(row)
 		return table.concat(row, '\t')
 	end):concat'\n')
 
